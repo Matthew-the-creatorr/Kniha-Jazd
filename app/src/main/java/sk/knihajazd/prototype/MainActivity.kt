@@ -104,6 +104,10 @@ private fun MainApp() {
     var customBrand by remember { mutableStateOf(p.getString("custom_brand","") ?: "") }
     var model by remember { mutableStateOf(p.getString("model","Panamera") ?: "Panamera") }
     var customModel by remember { mutableStateOf(p.getString("custom","") ?: "") }
+    var editableModel by remember { mutableStateOf(
+        if ((p.getString("model","Panamera") ?: "Panamera") == "Iný model")
+            p.getString("custom","") ?: "" else p.getString("model","Panamera") ?: "Panamera"
+    ) }
     var reg by remember { mutableStateOf(p.getString("plate","") ?: "") }
     var year by remember { mutableStateOf(p.getString("year","2021") ?: "2021") }
     var paint by remember { mutableStateOf(p.getString("paint","Čierna") ?: "Čierna") }
@@ -120,39 +124,19 @@ private fun MainApp() {
     var message by remember { mutableStateOf("") }
     var customPhotoPath by remember { mutableStateOf(p.getString("custom_photo","") ?: "") }
     var photoRevision by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        loadingBrands = true
-        try {
-            availableBrands = (allBrands.filter { it != "Iná značka" } + CarCatalog.fetchMakes() + "Iná značka")
-                .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
-            catalogStatus = "Online databáza značiek načítaná"
-        } catch (e: Exception) {
-            catalogStatus = "Offline katalóg: online databáza nie je dostupná."
-        } finally {
-            loadingBrands = false
-        }
-    }
-    LaunchedEffect(brand) {
-        loadingModels = true
-        try {
-            availableModels = ((carModels[brand] ?: emptyList()) + CarCatalog.fetchModels(brand))
-                .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
-        } catch (e: Exception) {
-            availableModels = carModels[brand] ?: emptyList()
-        } finally {
-            loadingModels = false
-        }
-    }
     val chosenBrand = if(brand=="Iná značka") customBrand.trim() else brand.trim()
-    val chosenModel = if(model == "Iný model") customModel.trim() else model.trim()
+    val chosenModel = editableModel.trim()
     val carSpec = listOf(chosenBrand, chosenModel, year, paint, finish).joinToString("|")
+    val isKodiaqSilver = chosenBrand.equals("Škoda",ignoreCase=true) &&
+        chosenModel.equals("Kodiaq",ignoreCase=true) &&
+        (paint == "Strieborná" || paint == "Sivá")
     val generatedPhoto = remember(aiImagePath, aiImageSpec, carSpec, aiRevision) {
         if (aiImageSpec == carSpec && aiImagePath.isNotBlank()) decodeVehicleBitmap(aiImagePath)
         else null
     }
     val generateNow: () -> Unit = {
         if (aiServer.isBlank() || aiToken.isBlank()) {
-            showAiConfig = true
+            message = "Automatické AI generovanie ešte nemá pripojenú službu. Môžeš zatiaľ použiť pripravené pozadie Kodiaqu alebo vlastnú fotografiu."
         } else if (chosenBrand.isBlank() || chosenModel.isBlank()) {
             message = "Najprv vyber značku a model vozidla."
         } else {
@@ -169,7 +153,7 @@ private fun MainApp() {
                     p.edit().putString("ai_image",saved).putString("ai_spec",carSpec)
                         .putString("ai_server",aiServer).apply()
                     customPhotoPath = ""
-                    p.edit().remove("custom_photo").apply()
+                    p.edit().remove("custom_photo").remove("custom_photo_spec").apply()
                     message = "AI pozadie bolo vytvorené pre $chosenBrand $chosenModel."
                 } catch (e: Exception) {
                     message = "Generovanie zlyhalo: " + (e.message ?: "Skontroluj server.")
@@ -186,7 +170,7 @@ private fun MainApp() {
                 }
                 if (destination.exists() && destination.length() > 0) {
                     customPhotoPath = destination.absolutePath
-                    p.edit().putString("custom_photo", customPhotoPath).apply()
+                    p.edit().putString("custom_photo", customPhotoPath).putString("custom_photo_spec", carSpec).apply()
                     photoRevision++
                     message = "Tvoja fotografia je nastavená ako pozadie vozidla."
                 }
@@ -195,8 +179,8 @@ private fun MainApp() {
             }
         }
     }
-    val userPhoto = remember(customPhotoPath, photoRevision) {
-        if(customPhotoPath.isEmpty()) null else try {
+    val userPhoto = remember(customPhotoPath, photoRevision,carSpec) {
+        if(customPhotoPath.isEmpty() || p.getString("custom_photo_spec","") != carSpec) null else try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(customPhotoPath, bounds)
             val longest = maxOf(bounds.outWidth, bounds.outHeight)
@@ -221,11 +205,13 @@ private fun MainApp() {
         onBackground=Bright,surface=Color(0xFF1C2030),onSurface=Bright,onSurfaceVariant=Muted)) {
         CompositionLocalProvider(LocalContentColor provides Bright) {
             Box(Modifier.fillMaxSize().background(Charcoal)) {
-                if(userPhoto != null || generatedPhoto != null || (chosenBrand=="Porsche" && chosenModel=="Panamera")) {
+                if(userPhoto != null || generatedPhoto != null || isKodiaqSilver ||
+                    (chosenBrand=="Porsche" && chosenModel=="Panamera")) {
                     Image(
                         painter=when {
                             userPhoto != null -> BitmapPainter(userPhoto)
                             generatedPhoto != null -> BitmapPainter(generatedPhoto)
+                            isKodiaqSilver -> painterResource(R.drawable.garage_kodiaq_silver)
                             else -> painterResource(photoDrawable)
                         },
                         contentDescription="Vybraná fotografia alebo AI obrázok vozidla",
@@ -269,14 +255,13 @@ private fun MainApp() {
                         } }
                         item { GlassPanel {
                             Text("02  Konfigurácia vozidla",color=Violet,fontWeight=FontWeight.Bold,fontSize=14.sp)
-                            SearchPick("Značka",availableBrands,brand,loadingBrands) {
+                            Pick("Značka",allBrands,brand) {
                                 brand=it
-                                model=carModels[it]?.firstOrNull() ?: "Iný model"
                             }
-                            if(brand=="Iná značka") DemoTextField(customBrand,{customBrand=it},"Zadaj vlastnú značku")
-                            SearchPick("Model",availableModels + "Iný model",model,loadingModels) { model=it }
-                            Text(catalogStatus,fontSize=10.sp,color=Muted)
-                            if(model=="Iný model") DemoTextField(customModel,{customModel=it},"Vlastný model")
+                            if(brand=="Iná značka") DemoTextField(customBrand,{customBrand=it},"Názov značky")
+                            DemoTextField(editableModel,{editableModel=it},"Model auta (napríklad Kodiaq)")
+                            Text("Môžeš napísať akýkoľvek model, bez hľadania v katalógu.",
+                                color=Muted,fontSize=11.sp)
                             Row(horizontalArrangement=Arrangement.spacedBy(9.dp)) {
                                 Box(Modifier.weight(1f)){DemoTextField(year,{year=it},"Rok")}
                                 Box(Modifier.weight(1f)){DemoTextField(reg,{reg=it},"EČV / ŠPZ")}
@@ -292,34 +277,33 @@ private fun MainApp() {
                             if (customPhotoPath.isNotEmpty()) {
                                 TextButton(onClick={
                                     customPhotoPath=""
-                                    p.edit().remove("custom_photo").apply()
+                                    p.edit().remove("custom_photo").remove("custom_photo_spec").apply()
                                     photoRevision++
                                 }) { Text("Odstrániť vlastnú fotku") }
                             }
                             Text("Bez vytvoreného AI obrázka sa cudzie auto nebude vydávať za vybraný model.",
                                 fontSize=11.sp,color=Muted)
-                            OutlinedButton(onClick={showAiConfig=true},modifier=Modifier.fillMaxWidth()) {
-                                Icon(Icons.Rounded.AutoAwesome,null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Pripojiť generovanie obrázkov")
-                            }
+                            if (isKodiaqSilver) Text("Vlastné realistické pozadie Škoda Kodiaq je pripravené.",
+                                color=Violet,fontSize=12.sp)
+                            else Text("Pre tento model môžeš použiť vlastnú fotografiu. Online generovanie ešte nie je aktivované.",
+                                color=Muted,fontSize=12.sp)
                         } }
                         item {
                             Button(
                                 onClick={
                                     p.edit().putBoolean("setup_complete",true).putString("driver",driver)
                                         .putString("brand",brand).putString("custom_brand",customBrand)
-                                        .putString("model",model).putString("custom",customModel)
+                                        .putString("model","Iný model").putString("custom",editableModel)
                                         .putString("plate",reg).putString("year",year).putString("paint",paint)
                                         .putString("finish",finish).apply()
                                     pwd="";setup=false
-                                    if(aiServer.isNotBlank() && aiToken.isNotBlank()) generateNow()
+                                    // Pozadie sa zmení automaticky podľa zvoleného modelu a farby.
                                 },
                                 modifier=Modifier.fillMaxWidth().height(54.dp),
                                 shape=RoundedCornerShape(18.dp),
                                 colors=ButtonDefaults.buttonColors(containerColor=Violet)
                             ) { Text("Vstúpiť do garáže",fontWeight=FontWeight.Bold,color=Color(0xFF10051E)) }
-                            Text("DEMO: fotografia vozidla je ilustračná. Heslo sa neukladá a nevytvára sa účet.",
+                            Text("V0.5 · Vybraný model sa nezamieňa s Porsche. Heslo sa neukladá.",
                                 fontSize=11.sp,color=Muted,modifier=Modifier.padding(top=8.dp,bottom=40.dp))
                         }
                     }
@@ -441,21 +425,16 @@ private fun MainApp() {
                                                 IconButton(onClick={setup=true}) {Icon(Icons.Rounded.Edit,"Upraviť vozidlo",tint=Violet)}
                                             }
                                             InfoRow("Značka",chosenBrand)
-                                            InfoRow("Model",if(model=="Iný model")customModel.ifBlank{"Neuvedený"} else model)
+                                            InfoRow("Model",chosenModel.ifBlank{"Neuvedený"})
                                             InfoRow("Rok výroby",year)
                                             InfoRow("ŠPZ / EČV",reg.ifBlank{"Nevyplnené"})
                                             InfoRow("Farba / povrch",paint+" · "+finish)
                                             InfoRow("Objem nádrže","Nevyplnené")
                                             InfoRow("Spotreba","Čaká na údaje")
-                                            OutlinedButton(
-                                                onClick=generateNow,
-                                                modifier=Modifier.fillMaxWidth(),
-                                                enabled=!generating
-                                            ) {
-                                                Icon(Icons.Rounded.AutoAwesome,null,tint=Violet)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(if(generating) "Gemini generuje..." else "Vygenerovať AI pozadie")
-                                            }
+                                            if(isKodiaqSilver) Text("Pozadie Škoda Kodiaq – strieborná",
+                                                color=Violet,fontWeight=FontWeight.SemiBold)
+                                            else Text("Pre tento model nie je pripravený AI obrázok. Použi vlastnú fotografiu.",
+                                                fontSize=12.sp,color=Muted)
                                             OutlinedButton(
                                                 onClick={photoLauncher.launch("image/*")},
                                                 modifier=Modifier.fillMaxWidth()
@@ -467,7 +446,7 @@ private fun MainApp() {
                                             if(customPhotoPath.isNotEmpty()) {
                                                 TextButton(onClick={
                                                     customPhotoPath=""
-                                                    p.edit().remove("custom_photo").apply()
+                                                    p.edit().remove("custom_photo").remove("custom_photo_spec").apply()
                                                     photoRevision++
                                                 }){Text("Vrátiť sa na AI showroom")}
                                             }
@@ -475,6 +454,7 @@ private fun MainApp() {
                                                 when {
                                                     userPhoto != null -> "Zobrazuje sa tvoja vlastná fotografia."
                                                     generatedPhoto != null -> "Zobrazuje sa AI pozadie pre vybraný model."
+                                                    isKodiaqSilver -> "Pripravené AI pozadie Škoda Kodiaq v striebornej farbe."
                                                     chosenBrand=="Porsche" && chosenModel=="Panamera" -> "Ukážka Porsche Panamera."
                                                     else -> "AI obrázok zatiaľ chýba. Preto je zobrazená prázdna garáž, nie cudzie auto."
                                                 },
@@ -509,24 +489,6 @@ private fun MainApp() {
                         Spacer(Modifier.height(13.dp))
                     }
                 }
-                if(showAiConfig) AlertDialog(
-                    onDismissRequest={showAiConfig=false},
-                    title={Text("AI pozadie cez Gemini")},
-                    text={
-                        Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                            Text("Vizuálna funkcia využíva zabezpečený firemný server, ktorý musí nastaviť správca. Gemini kľúč nepatrí do APK.",fontSize=12.sp)
-                            DemoTextField(aiServer,{aiServer=it},"HTTPS adresa AI servera")
-                            DemoTextField(aiToken,{aiToken=it},"Prístupový token servera",true)
-                            Text("Token sa neukladá do telefónu ani na GitHub. Generovanie môže byť spoplatnené.",fontSize=11.sp,color=Muted)
-                        }
-                    },
-                    dismissButton={TextButton(onClick={showAiConfig=false}) {Text("Zavrieť")}},
-                    confirmButton={TextButton(onClick={
-                        p.edit().putString("ai_server",aiServer).apply()
-                        showAiConfig=false
-                        generateNow()
-                    }) {Text("Generovať")}}
-                )
                 if(showAlerts) AlertDialog(onDismissRequest={showAlerts=false},
                     confirmButton={TextButton(onClick={showAlerts=false}){Text("Zavrieť")}},
                     title={Text("Upozornenia")},text={Text("Zatiaľ nemáš žiadne upozornenia. (Demo)")} )
