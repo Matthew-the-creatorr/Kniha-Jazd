@@ -1,0 +1,29 @@
+name: Build iOS Simulator
+on:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: Generate native Xcode project
+        run: |
+          cd ios
+          xcodegen generate --spec project.yml
+      - name: Build for iOS Simulator (no signing required)
+        run: |
+          cd ios
+          xcodebuild -project KnihaJazd.xcodeproj -scheme KnihaJazd -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Pack simulator app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent ios/build/Build/Products/Debug-iphonesimulator/KnihaJazd.app ios/KnihaJazd-v0.6-Simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KnihaJazd-0.6-iOS-Simulator
+          path: ios/KnihaJazd-v0.6-Simulator.zip
