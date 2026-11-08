@@ -25,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
@@ -520,7 +521,7 @@ private fun MainApp() {
                         p.edit().putString("ai_server",aiServer).apply()
                         showAiConfig=false
                         generateNow()
-                    }) {Text("Generovať")}
+                    }) {Text("Generovať")}}
                 )
                 if(showAlerts) AlertDialog(onDismissRequest={showAlerts=false},
                     confirmButton={TextButton(onClick={showAlerts=false}){Text("Zavrieť")}},
