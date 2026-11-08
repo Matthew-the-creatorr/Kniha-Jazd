@@ -15,6 +15,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
 
 private val Violet = Color(0xFFB368FF)
@@ -81,6 +83,19 @@ class MainActivity: ComponentActivity() {
 private fun MainApp() {
     val context = LocalContext.current
     val p = remember { context.getSharedPreferences("kniha_jazd_demo_v2",Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
+    var availableBrands by remember { mutableStateOf(allBrands) }
+    var availableModels by remember { mutableStateOf(carModels["Porsche"] ?: emptyList()) }
+    var loadingBrands by remember { mutableStateOf(false) }
+    var loadingModels by remember { mutableStateOf(false) }
+    var catalogStatus by remember { mutableStateOf("") }
+    var aiServer by remember { mutableStateOf(p.getString("ai_server","") ?: "") }
+    var aiToken by remember { mutableStateOf("") }
+    var showAiConfig by remember { mutableStateOf(false) }
+    var generating by remember { mutableStateOf(false) }
+    var aiImagePath by remember { mutableStateOf(p.getString("ai_image","") ?: "") }
+    var aiImageSpec by remember { mutableStateOf(p.getString("ai_spec","") ?: "") }
+    var aiRevision by remember { mutableIntStateOf(0) }
     var setup by remember { mutableStateOf(!p.getBoolean("setup_complete",false)) }
     var driver by remember { mutableStateOf(p.getString("driver","") ?: "") }
     var pwd by remember { mutableStateOf("") }
@@ -103,6 +118,62 @@ private fun MainApp() {
     var message by remember { mutableStateOf("") }
     var customPhotoPath by remember { mutableStateOf(p.getString("custom_photo","") ?: "") }
     var photoRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        loadingBrands = true
+        try {
+            availableBrands = (allBrands.filter { it != "Iná značka" } + CarCatalog.fetchMakes() + "Iná značka")
+                .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+            catalogStatus = "Online databáza značiek načítaná"
+        } catch (e: Exception) {
+            catalogStatus = "Offline katalóg: online databáza nie je dostupná."
+        } finally {
+            loadingBrands = false
+        }
+    }
+    LaunchedEffect(brand) {
+        loadingModels = true
+        try {
+            availableModels = ((carModels[brand] ?: emptyList()) + CarCatalog.fetchModels(brand))
+                .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        } catch (e: Exception) {
+            availableModels = carModels[brand] ?: emptyList()
+        } finally {
+            loadingModels = false
+        }
+    }
+    val chosenModel = if(model == "Iný model") customModel.trim() else model.trim()
+    val carSpec = listOf(brand, chosenModel, year, paint, finish).joinToString("|")
+    val generatedPhoto = remember(aiImagePath, aiImageSpec, carSpec, aiRevision) {
+        if (aiImageSpec == carSpec && aiImagePath.isNotBlank()) decodeVehicleBitmap(aiImagePath)
+        else null
+    }
+    val generateNow: () -> Unit = {
+        if (aiServer.isBlank() || aiToken.isBlank()) {
+            showAiConfig = true
+        } else if (chosenModel.isBlank()) {
+            message = "Najprv vyber model vozidla."
+        } else {
+            generating = true
+            scope.launch {
+                try {
+                    val saved = GeminiBackground.generate(
+                        aiServer, aiToken, brand, chosenModel, year,
+                        paint, finish, File(context.filesDir,"gemini_vehicle_wallpaper.png")
+                    )
+                    aiImagePath = saved
+                    aiImageSpec = carSpec
+                    aiRevision++
+                    p.edit().putString("ai_image",saved).putString("ai_spec",carSpec)
+                        .putString("ai_server",aiServer).apply()
+                    customPhotoPath = ""
+                    p.edit().remove("custom_photo").apply()
+                    message = "AI pozadie bolo vytvorené pre $brand $chosenModel."
+                } catch (e: Exception) {
+                    message = "Generovanie zlyhalo: " + (e.message ?: "Skontroluj server.")
+                } finally { generating = false }
+            }
+        }
+    }
     val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             try {
@@ -147,17 +218,25 @@ private fun MainApp() {
         onBackground=Bright,surface=Color(0xFF1C2030),onSurface=Bright,onSurfaceVariant=Muted)) {
         CompositionLocalProvider(LocalContentColor provides Bright) {
             Box(Modifier.fillMaxSize().background(Charcoal)) {
-                Image(
-                    painter=if(userPhoto != null) BitmapPainter(userPhoto) else painterResource(photoDrawable),
-                    contentDescription="Fotografia luxusnej garáže",
-                    contentScale=ContentScale.Crop,
-                    alignment=Alignment.TopCenter,
-                    modifier=Modifier.fillMaxSize().graphicsLayer{
-                        translationX=pan
-                        scaleX=1.04f
-                        scaleY=1.04f
-                    }
-                )
+                if(userPhoto != null || generatedPhoto != null || (brand=="Porsche" && chosenModel=="Panamera")) {
+                    Image(
+                        painter=when {
+                            userPhoto != null -> BitmapPainter(userPhoto)
+                            generatedPhoto != null -> BitmapPainter(generatedPhoto)
+                            else -> painterResource(photoDrawable)
+                        },
+                        contentDescription="Vybraná fotografia alebo AI obrázok vozidla",
+                        contentScale=ContentScale.Crop,
+                        alignment=Alignment.TopCenter,
+                        modifier=Modifier.fillMaxSize().graphicsLayer {
+                            translationX=pan
+                            scaleX=1.04f
+                            scaleY=1.04f
+                        }
+                    )
+                } else {
+                    EmptyShowroom()
+                }
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
                     colorStops=arrayOf(
                         0.0f to Color(0xF404050A),
@@ -187,10 +266,12 @@ private fun MainApp() {
                         } }
                         item { GlassPanel {
                             Text("02  Konfigurácia vozidla",color=Violet,fontWeight=FontWeight.Bold,fontSize=14.sp)
-                            Pick("Značka",allBrands,brand) {
-                                brand=it; model=carModels[it]?.firstOrNull() ?: "Iný model"
+                            SearchPick("Značka",availableBrands,brand,loadingBrands) {
+                                brand=it
+                                model=carModels[it]?.firstOrNull() ?: "Iný model"
                             }
-                            Pick("Model",(carModels[brand] ?: emptyList()) + "Iný model",model){model=it}
+                            SearchPick("Model",availableModels + "Iný model",model,loadingModels) { model=it }
+                            Text(catalogStatus,fontSize=10.sp,color=Muted)
                             if(model=="Iný model") DemoTextField(customModel,{customModel=it},"Vlastný model")
                             Row(horizontalArrangement=Arrangement.spacedBy(9.dp)) {
                                 Box(Modifier.weight(1f)){DemoTextField(year,{year=it},"Rok")}
@@ -211,8 +292,13 @@ private fun MainApp() {
                                     photoRevision++
                                 }) { Text("Odstrániť vlastnú fotku") }
                             }
-                            Text("Farby sa zobrazujú na ukážkovom Porsche. Pre presný model použi vlastnú fotografiu.",
+                            Text("Bez vytvoreného AI obrázka sa cudzie auto nebude vydávať za vybraný model.",
                                 fontSize=11.sp,color=Muted)
+                            OutlinedButton(onClick={showAiConfig=true},modifier=Modifier.fillMaxWidth()) {
+                                Icon(Icons.Rounded.AutoAwesome,null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Pripojiť generovanie obrázkov")
+                            }
                         } }
                         item {
                             Button(
@@ -222,6 +308,7 @@ private fun MainApp() {
                                         .putString("plate",reg).putString("year",year).putString("paint",paint)
                                         .putString("finish",finish).apply()
                                     pwd="";setup=false
+                                    if(aiServer.isNotBlank() && aiToken.isNotBlank()) generateNow()
                                 },
                                 modifier=Modifier.fillMaxWidth().height(54.dp),
                                 shape=RoundedCornerShape(18.dp),
@@ -232,7 +319,22 @@ private fun MainApp() {
                         }
                     }
                 } else {
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    Column(
+                    Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
+                        .pointerInput(tab) {
+                            var swipeDistance = 0f
+                            detectHorizontalDragGestures(
+                                onDragEnd = {
+                                    if (swipeDistance < -75f) tab=(tab+1).coerceAtMost(2)
+                                    if (swipeDistance > 75f) tab=(tab-1).coerceAtLeast(0)
+                                    swipeDistance=0f
+                                }
+                            ) { change, delta ->
+                                change.consume()
+                                swipeDistance += delta
+                            }
+                        }
+                ) {
                         Row(Modifier.fillMaxWidth().padding(start=15.dp,end=12.dp,top=13.dp,bottom=8.dp),
                             verticalAlignment=Alignment.CenterVertically) {
                             Text("◢",fontSize=31.sp,fontWeight=FontWeight.Black,color=Violet)
@@ -258,14 +360,7 @@ private fun MainApp() {
                             modifier=Modifier.padding(horizontal=20.dp).padding(top=3.dp),
                             fontSize=11.sp,color=Bright.copy(alpha=.85f),fontWeight=FontWeight.SemiBold)
                         Spacer(Modifier.weight(1f))
-                        Box(Modifier.fillMaxWidth().pointerInput(tab){
-                            var drag=0f
-                            detectHorizontalDragGestures(onDragEnd={
-                                if(drag < -85f) tab=(tab+1).coerceAtMost(2)
-                                if(drag > 85f) tab=(tab-1).coerceAtLeast(0)
-                                drag=0f
-                            }){change,amount->change.consume();drag+=amount}
-                        }) {
+                        Box(Modifier.fillMaxWidth()) {
                             Crossfade(targetState=tab,animationSpec=tween(480),label="garage-head-turn") { page ->
                                 Column(Modifier.fillMaxWidth().padding(horizontal=16.dp),
                                     verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -348,6 +443,15 @@ private fun MainApp() {
                                             InfoRow("Objem nádrže","Nevyplnené")
                                             InfoRow("Spotreba","Čaká na údaje")
                                             OutlinedButton(
+                                                onClick=generateNow,
+                                                modifier=Modifier.fillMaxWidth(),
+                                                enabled=!generating
+                                            ) {
+                                                Icon(Icons.Rounded.AutoAwesome,null,tint=Violet)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(if(generating) "Gemini generuje..." else "Vygenerovať AI pozadie")
+                                            }
+                                            OutlinedButton(
                                                 onClick={photoLauncher.launch("image/*")},
                                                 modifier=Modifier.fillMaxWidth()
                                             ) {
@@ -362,10 +466,15 @@ private fun MainApp() {
                                                     photoRevision++
                                                 }){Text("Vrátiť sa na AI showroom")}
                                             }
-                                            Text(if(userPhoto!=null)
-                                                "Zobrazuje sa tvoja vlastná fotografia auta."
-                                                else "AI showroom ukazuje Porsche v zvolenej farbe. Iné modely vyžadujú vlastnú fotku.",
-                                                color=Muted,fontSize=10.sp)
+                                            Text(
+                                                when {
+                                                    userPhoto != null -> "Zobrazuje sa tvoja vlastná fotografia."
+                                                    generatedPhoto != null -> "Zobrazuje sa AI pozadie pre vybraný model."
+                                                    brand=="Porsche" && chosenModel=="Panamera" -> "Ukážka Porsche Panamera."
+                                                    else -> "AI obrázok zatiaľ chýba. Preto je zobrazená prázdna garáž, nie cudzie auto."
+                                                },
+                                                color=Muted,fontSize=10.sp
+                                            )
                                         }
                                     }
                                 }
@@ -395,6 +504,24 @@ private fun MainApp() {
                         Spacer(Modifier.height(13.dp))
                     }
                 }
+                if(showAiConfig) AlertDialog(
+                    onDismissRequest={showAiConfig=false},
+                    title={Text("AI pozadie cez Gemini")},
+                    text={
+                        Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                            Text("Vizuálna funkcia využíva zabezpečený firemný server, ktorý musí nastaviť správca. Gemini kľúč nepatrí do APK.",fontSize=12.sp)
+                            DemoTextField(aiServer,{aiServer=it},"HTTPS adresa AI servera")
+                            DemoTextField(aiToken,{aiToken=it},"Prístupový token servera",true)
+                            Text("Token sa neukladá do telefónu ani na GitHub. Generovanie môže byť spoplatnené.",fontSize=11.sp,color=Muted)
+                        }
+                    },
+                    dismissButton={TextButton(onClick={showAiConfig=false}) {Text("Zavrieť")}},
+                    confirmButton={TextButton(onClick={
+                        p.edit().putString("ai_server",aiServer).apply()
+                        showAiConfig=false
+                        generateNow()
+                    }) {Text("Generovať")}
+                )
                 if(showAlerts) AlertDialog(onDismissRequest={showAlerts=false},
                     confirmButton={TextButton(onClick={showAlerts=false}){Text("Zavrieť")}},
                     title={Text("Upozornenia")},text={Text("Zatiaľ nemáš žiadne upozornenia. (Demo)")} )
@@ -491,4 +618,68 @@ private fun MainApp() {
             modifier=Modifier.weight(.57f),maxLines=2)
     }
     HorizontalDivider(color=Color.White.copy(alpha=.1f))
+}
+
+@Composable private fun SearchPick(
+    title:String, options:List<String>, current:String,
+    loading:Boolean,onChange:(String)->Unit
+) {
+    var open by remember { mutableStateOf(false) }
+    var search by remember { mutableStateOf("") }
+    OutlinedButton(onClick={open=true},modifier=Modifier.fillMaxWidth(),
+        shape=RoundedCornerShape(12.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=Bright)) {
+        Text("$title: $current",modifier=Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+        if(loading) CircularProgressIndicator(modifier=Modifier.size(15.dp),strokeWidth=2.dp)
+        else Icon(Icons.Rounded.KeyboardArrowDown,null)
+    }
+    if(open) Dialog(onDismissRequest={open=false}) {
+        Column(Modifier.fillMaxWidth().background(Color(0xFF151824),RoundedCornerShape(20.dp))
+            .padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            Text("Vybrať: $title",color=Bright,fontSize=20.sp,fontWeight=FontWeight.Bold)
+            OutlinedTextField(value=search,onValueChange={search=it},singleLine=true,
+                label={Text("Hľadať značku alebo model")},modifier=Modifier.fillMaxWidth())
+            val filtered = remember(options,search) {
+                options.distinctBy{it.lowercase()}
+                    .filter { it.contains(search.trim(), ignoreCase=true) }
+                    .take(100)
+            }
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max=350.dp)) {
+                items(filtered) { option ->
+                    Text(option,color=Bright,modifier=Modifier.fillMaxWidth()
+                        .clickable {onChange(option);open=false;search=""}
+                        .padding(12.dp),fontSize=15.sp)
+                    HorizontalDivider(color=Color.White.copy(alpha=.1f))
+                }
+            }
+            Text(if(loading)"Načítava sa online katalóg..." else "Zobrazuje sa max. 100 výsledkov. Spresni vyhľadávanie.",
+                fontSize=11.sp,color=Muted)
+            TextButton(onClick={open=false},modifier=Modifier.align(Alignment.End)) { Text("Zavrieť") }
+        }
+    }
+}
+
+private fun decodeVehicleBitmap(path:String): androidx.compose.ui.graphics.ImageBitmap? =
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        BitmapFactory.decodeFile(path,bounds)
+        val longest = maxOf(bounds.outWidth,bounds.outHeight)
+        val options = BitmapFactory.Options().apply { inSampleSize=maxOf(1,longest/1700) }
+        BitmapFactory.decodeFile(path,options)?.asImageBitmap()
+    } catch (_:Exception){null}
+
+@Composable private fun EmptyShowroom(){
+    Canvas(Modifier.fillMaxSize()) {
+        drawRect(brush=Brush.verticalGradient(listOf(Color(0xFF05060B),Color(0xFF1B202A),Color(0xFF080A0F))))
+        val w=size.width; val h=size.height
+        val white=Color.White.copy(alpha=.65f)
+        for(i in 0..4) {
+            val y=h*(.15f+i*.075f)
+            drawLine(white,Offset(w*.05f,y),Offset(w*.94f,y-h*.06f),2.6f)
+        }
+        for(i in 0..3) {
+            val x=w*(i+.5f)/4f
+            drawLine(white.copy(alpha=.4f),Offset(x,h*.16f),Offset(x,h*.52f),2f)
+        }
+        drawLine(white.copy(alpha=.23f),Offset(0f,h*.55f),Offset(w,h*.55f),3f)
+    }
 }
