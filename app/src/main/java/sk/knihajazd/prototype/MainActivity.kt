@@ -2,8 +2,12 @@ package sk.knihajazd.prototype
 
 import android.os.Bundle
 import android.content.Context
+import android.graphics.BitmapFactory
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -20,6 +24,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -95,19 +101,60 @@ private fun MainApp() {
     var showDetails by remember { mutableStateOf(false) }
     var privacy by remember { mutableStateOf("Služobná") }
     var message by remember { mutableStateOf("") }
+    var customPhotoPath by remember { mutableStateOf(p.getString("custom_photo","") ?: "") }
+    var photoRevision by remember { mutableIntStateOf(0) }
+    val photoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            try {
+                val destination = File(context.filesDir, "my_car_photo.jpg")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    destination.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (destination.exists() && destination.length() > 0) {
+                    customPhotoPath = destination.absolutePath
+                    p.edit().putString("custom_photo", customPhotoPath).apply()
+                    photoRevision++
+                    message = "Tvoja fotografia je nastavená ako pozadie vozidla."
+                }
+            } catch (e: Exception) {
+                message = "Fotografiu sa nepodarilo načítať. Skús inú."
+            }
+        }
+    }
+    val userPhoto = remember(customPhotoPath, photoRevision) {
+        if(customPhotoPath.isEmpty()) null else try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(customPhotoPath, bounds)
+            val longest = maxOf(bounds.outWidth, bounds.outHeight)
+            val sample = maxOf(1, longest / 1700)
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            BitmapFactory.decodeFile(customPhotoPath, options)?.asImageBitmap()
+        } catch(e: Exception) { null }
+    }
+    val photoDrawable = when (paint) {
+        "Biela" -> R.drawable.garage_white
+        "Sivá" -> R.drawable.garage_grey
+        "Strieborná" -> R.drawable.garage_silver
+        "Červená" -> R.drawable.garage_red
+        "Modrá" -> R.drawable.garage_blue
+        "Zelená" -> R.drawable.garage_green
+        "Fialová" -> R.drawable.garage_purple
+        "Žltá" -> R.drawable.garage_yellow
+        else -> R.drawable.garage_black
+    }
     val pan by animateFloatAsState(targetValue=when(tab){0 -> 36f;1 -> 0f;else -> -36f}, animationSpec=tween(680),label="background-camera")
     MaterialTheme(colorScheme=darkColorScheme(primary=Violet,onPrimary=Color.Black,background=Charcoal,
         onBackground=Bright,surface=Color(0xFF1C2030),onSurface=Bright,onSurfaceVariant=Muted)) {
         CompositionLocalProvider(LocalContentColor provides Bright) {
             Box(Modifier.fillMaxSize().background(Charcoal)) {
                 Image(
-                    painter=painterResource(R.drawable.garage_showroom),
+                    painter=if(userPhoto != null) BitmapPainter(userPhoto) else painterResource(photoDrawable),
                     contentDescription="Fotografia luxusnej garáže",
                     contentScale=ContentScale.Crop,
                     alignment=Alignment.TopCenter,
                     modifier=Modifier.fillMaxSize().graphicsLayer{
                         translationX=pan
-                        scaleX=1.12f
+                        scaleX=1.04f
                         scaleY=1.04f
                     }
                 )
@@ -115,14 +162,14 @@ private fun MainApp() {
                     colorStops=arrayOf(
                         0.0f to Color(0xF404050A),
                         .16f to Color(0x9904050B),
-                        .33f to Color(0x2404050B),
-                        .53f to Color(0x39060911),
-                        .77f to Color(0xDA080A13),
+                        .33f to Color(0x1004050B),
+                        .53f to Color(0x25060911),
+                        .77f to Color(0xB8080A13),
                         1f to Color(0xFB05060C)
                     )
                 )))
                 if(setup) {
-                    LazyColumn(Modifier.fillMaxSize().padding(horizontal=18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                    LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal=18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                         item {
                             Spacer(Modifier.height(24.dp))
                             Row(verticalAlignment=Alignment.CenterVertically) {
@@ -151,6 +198,21 @@ private fun MainApp() {
                             }
                             Pick("Farba karosérie",colors,paint){paint=it}
                             Pick("Povrch",finishes,finish){finish=it}
+                            OutlinedButton(onClick={photoLauncher.launch("image/*")}, modifier=Modifier.fillMaxWidth(),
+                                shape=RoundedCornerShape(14.dp)) {
+                                Icon(Icons.Rounded.AddPhotoAlternate,null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Pridať fotku svojho auta",color=Bright)
+                            }
+                            if (customPhotoPath.isNotEmpty()) {
+                                TextButton(onClick={
+                                    customPhotoPath=""
+                                    p.edit().remove("custom_photo").apply()
+                                    photoRevision++
+                                }) { Text("Odstrániť vlastnú fotku") }
+                            }
+                            Text("Farby sa zobrazujú na ukážkovom Porsche. Pre presný model použi vlastnú fotografiu.",
+                                fontSize=11.sp,color=Muted)
                         } }
                         item {
                             Button(
@@ -170,7 +232,7 @@ private fun MainApp() {
                         }
                     }
                 } else {
-                    Column(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                         Row(Modifier.fillMaxWidth().padding(start=15.dp,end=12.dp,top=13.dp,bottom=8.dp),
                             verticalAlignment=Alignment.CenterVertically) {
                             Text("◢",fontSize=31.sp,fontWeight=FontWeight.Black,color=Violet)
@@ -191,6 +253,10 @@ private fun MainApp() {
                                 TextButton(onClick={showFinish=true}){Text("Koniec")}
                             }
                         }
+                        Text(
+                            brand + " " + (if(model=="Iný model") customModel else model) + "  ·  " + paint,
+                            modifier=Modifier.padding(horizontal=20.dp).padding(top=3.dp),
+                            fontSize=11.sp,color=Bright.copy(alpha=.85f),fontWeight=FontWeight.SemiBold)
                         Spacer(Modifier.weight(1f))
                         Box(Modifier.fillMaxWidth().pointerInput(tab){
                             var drag=0f
@@ -281,7 +347,24 @@ private fun MainApp() {
                                             InfoRow("Farba / povrch",paint+" · "+finish)
                                             InfoRow("Objem nádrže","Nevyplnené")
                                             InfoRow("Spotreba","Čaká na údaje")
-                                            Text("Fotografia garáže je ukážková a nemusí zobrazovať vybrané vozidlo.",
+                                            OutlinedButton(
+                                                onClick={photoLauncher.launch("image/*")},
+                                                modifier=Modifier.fillMaxWidth()
+                                            ) {
+                                                Icon(Icons.Rounded.AddPhotoAlternate,null,tint=Violet)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("Zvoliť fotku môjho auta")
+                                            }
+                                            if(customPhotoPath.isNotEmpty()) {
+                                                TextButton(onClick={
+                                                    customPhotoPath=""
+                                                    p.edit().remove("custom_photo").apply()
+                                                    photoRevision++
+                                                }){Text("Vrátiť sa na AI showroom")}
+                                            }
+                                            Text(if(userPhoto!=null)
+                                                "Zobrazuje sa tvoja vlastná fotografia auta."
+                                                else "AI showroom ukazuje Porsche v zvolenej farbe. Iné modely vyžadujú vlastnú fotku.",
                                                 color=Muted,fontSize=10.sp)
                                         }
                                     }
@@ -350,7 +433,7 @@ private fun MainApp() {
         .background(Color(0xE6171A28),RoundedCornerShape(23.dp))
         .border(1.dp,Brush.linearGradient(listOf(Violet.copy(alpha=.9f),Color.White.copy(alpha=.12f),Violet.copy(alpha=.54f))),
             RoundedCornerShape(23.dp)).padding(15.dp),
-        verticalArrangement=Arrangement.spacedBy(10.dp),content=content)
+        verticalArrangement=Arrangement.spacedBy(8.dp),content=content)
 }
 @Composable private fun DemoTextField(value:String,onChange:(String)->Unit,label:String,secret:Boolean=false) {
     OutlinedTextField(value=value,onValueChange=onChange,label={Text(label)},
