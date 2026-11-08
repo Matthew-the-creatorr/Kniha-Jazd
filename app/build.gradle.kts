@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "sk.knihajazd.prototype"
     compileSdk = 35
-    defaultConfig { applicationId = "sk.knihajazd.prototype"; minSdk = 26; targetSdk = 35; versionCode = 5; versionName = "0.5" }
+    defaultConfig { applicationId = "sk.knihajazd.prototype"; minSdk = 26; targetSdk = 35; versionCode = 6; versionName = "0.6" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
@@ -18,4 +18,6 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }
