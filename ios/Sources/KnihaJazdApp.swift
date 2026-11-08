@@ -63,10 +63,10 @@ func durationText(_ start:Date,_ end:Date)->String {
             data.privateKm-=224
             var day=Calendar.current.startOfDay(for:Date())
             while Calendar.current.isDateInWeekend(day){day=Calendar.current.date(byAdding:.day,value:1,to:day)!}
-            let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360..0.479)*60))
-            let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90..0.120)*60))
-            let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110..0.150)*60))
-            let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90..0.120)*60))
+            let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360..479)*60))
+            let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90..120)*60))
+            let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110..150)*60))
+            let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90..120)*60))
             data.pending.append(PairDraft(first:departure,firstEnd:firstEnd,second:back,secondEnd:secondEnd))
         }
         persist()
