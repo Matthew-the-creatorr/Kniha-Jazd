@@ -569,33 +569,120 @@ private fun MainApp() {
                         Spacer(Modifier.height(13.dp))
                     }
                 }
-                if(showAlerts) AlertDialog(onDismissRequest={showAlerts=false},
-                    confirmButton={TextButton(onClick={showAlerts=false}){Text("Zavrieť")}},
-                    title={Text("Upozornenia")},text={Text("Zatiaľ nemáš žiadne upozornenia. (Demo)")} )
+                if(showAlerts) {
+                    val pending=db.eligiblePair()
+                    AlertDialog(onDismissRequest={
+                            if(pending!=null)db.postpone(pending.id)
+                            showAlerts=false
+                        },
+                        title={Text("Pripravené jazdy")},
+                        text={Text(if(pending!=null)
+                            "Modelový okruh Trenčín – Přerov – Trenčín (2 × 112 km). Uložiť obe modelové jazdy? V podrobnostiach budú označené Simulovaná."
+                            else "Zatiaľ nemáš žiadne pripravené modelové dvojice. Súkromné kilometre: "+shownKm(db.privateBalance()))},
+                        confirmButton={
+                            TextButton(onClick={
+                                if(pending!=null){db.confirmPair(pending);revision++}
+                                showAlerts=false
+                            }){Text(if(pending!=null)"Uložiť obe" else "Zavrieť")}
+                        },
+                        dismissButton={
+                            if(pending!=null) TextButton(onClick={
+                                db.postpone(pending.id);showAlerts=false
+                            }){Text("Odložiť")}
+                        }
+                    )
+                }
                 if(showProfile) AlertDialog(onDismissRequest={showProfile=false},
                     confirmButton={TextButton(onClick={showProfile=false}){Text("Zavrieť")}},
                     dismissButton={TextButton(onClick={showProfile=false;setup=true}){Text("Upraviť vozidlo")}},
                     title={Text("Profil")},
                     text={Text("Vodič: "+driver.ifBlank{"Neuvedené"}+"\nVozidlo: "+chosenBrand+" "+chosenModel+"\n\nÚdaje sú uložené iba v tomto telefóne. Bez online účtu.")})
                 if(showFinish) AlertDialog(onDismissRequest={showFinish=false},
-                    title={Text("Ukončiť jazdu")},
+                    title={Text("Ukončiť GPS jazdu")},
                     text={
-                        Column(verticalArrangement=Arrangement.spacedBy(10.dp)) {
-                            Text("Vizuálna ukážka: GPS sa nezaznamenáva a žiadna skutočná trasa sa neuloží.")
+                        Column(verticalArrangement=Arrangement.spacedBy(9.dp)) {
+                            val snap=LiveDrive.snapshot
+                            Text("Nameraná vzdialenosť: "+(snap?.let{shownKm(it.km)}?:"—"))
+                            Text("Trvanie: "+(snap?.let{durationFormat(it.durationMs)}?:"—"))
+                            Text("GPS body: "+(snap?.fixCount?:0)+", výpadky: "+(snap?.gaps?:0),
+                                color=Muted,fontSize=12.sp)
                             Row(verticalAlignment=Alignment.CenterVertically) {
                                 FilterChip(selected=privacy=="Služobná",onClick={privacy="Služobná"},label={Text("Služobná")})
                                 Spacer(Modifier.width(8.dp))
                                 FilterChip(selected=privacy=="Súkromná",onClick={privacy="Súkromná"},label={Text("Súkromná")})
                             }
+                            if(privacy=="Súkromná")
+                                Text("Uložia sa iba kilometre. GPS trasa, mestá a časy sa nezachovajú.",
+                                    fontSize=12.sp,color=Muted)
+                            else {
+                                DemoTextField(firstTown,{firstTown=it},"Miesto odchodu")
+                                DemoTextField(lastTown,{lastTown=it},"Miesto príchodu")
+                            }
                         }
                     },
-                    dismissButton={TextButton(onClick={showFinish=false}){Text("Cancel")}},
-                    confirmButton={TextButton(onClick={showFinish=false;showConfirm=true}){Text("Save")}})
-                if(showConfirm) AlertDialog(onDismissRequest={showConfirm=false},
-                    title={Text("Potvrdenie")},
-                    text={Text("Uložiť demo ukončenie jazdy? Skutočné údaje sa nezapíšu.")},
-                    dismissButton={TextButton(onClick={showConfirm=false;showFinish=true}){Text("Cancel")}},
-                    confirmButton={TextButton(onClick={showConfirm=false;isTrip=false;message="Demo ukončené · žiadne GPS údaje neuložené"}){Text("Save")}})
+                    dismissButton={TextButton(onClick={showFinish=false}){Text("Späť")}},
+                    confirmButton={TextButton(onClick={
+                        val snap=LiveDrive.snapshot
+                        if(snap==null || snap.fixCount<2 || snap.km<0.02)
+                            message="GPS nezaznamenalo dostatok platných bodov. Túto jazdu nie je možné spoľahlivo uložiť."
+                        else {showFinish=false;showConfirm=true}
+                    }){Text("Pokračovať")}})
+                if(showConfirm) AlertDialog(onDismissRequest={showConfirm=false;showFinish=true},
+                    title={Text("Potvrdiť uloženie")},
+                    text={Text(if(privacy=="Súkromná")
+                        "Uložiť iba "+(LiveDrive.snapshot?.let{shownKm(it.km)}?:"—")+" do súkromného počítadla? Polohy a časy sa zahodia."
+                        else "Uložiť skutočnú GPS jazdu "+firstTown+" – "+lastTown+"?")},
+                    dismissButton={TextButton(onClick={showConfirm=false;showFinish=true}){Text("Späť")}},
+                    confirmButton={TextButton(onClick={
+                        LiveDrive.snapshot?.let{snap->
+                            if(privacy=="Súkromná"){
+                                val created=db.addPrivate(snap.km)
+                                message="Súkromné kilometre pripočítané. Zostatok: "+shownKm(db.privateBalance())+
+                                    if(created>0)". Pripravené modelové okruhy: "+created else ""
+                            }else{
+                                db.addReal(snap,firstTown.trim(),lastTown.trim(),"Služobná")
+                                message="GPS jazda uložená: "+firstTown+" – "+lastTown+"."
+                            }
+                            LiveDrive.first=null;LiveDrive.last=null;LiveDrive.snapshot=null
+                            revision++
+                        }
+                        showConfirm=false
+                    }){Text("Uložiť")}})
+                if(receiptReview) AlertDialog(onDismissRequest={receiptReview=false},
+                    title={Text("Údaje z tankovacieho bločku")},
+                    text={Column(verticalArrangement=Arrangement.spacedBy(7.dp)){
+                        Text("Rozpoznané údaje skontroluj a podľa potreby oprav.",fontSize=12.sp)
+                        DemoTextField(receiptDate,{receiptDate=it},"Dátum")
+                        DemoTextField(receiptLiters,{receiptLiters=it},"Natankované litre")
+                        DemoTextField(receiptFuel,{receiptFuel=it},"Palivo (Diesel B7 / Benzín E10)")
+                        DemoTextField(receiptTotal,{receiptTotal=it},"Celková cena €")
+                        Text("Bločky sú samostatné tankovania, nie automaticky spotreba jázd.",
+                            color=Muted,fontSize=11.sp)
+                    }},
+                    dismissButton={TextButton(onClick={receiptReview=false}){Text("Zrušiť")}},
+                    confirmButton={TextButton(onClick={
+                        val liters=receiptLiters.replace(',','.').toDoubleOrNull()
+                        val total=receiptTotal.replace(',','.').toDoubleOrNull()
+                        if(liters==null||liters<=0||total==null||total<0)
+                            message="Skontroluj litre a celkovú cenu."
+                        else {
+                            val destination=File(context.filesDir,"receipt_"+System.currentTimeMillis()+".jpg")
+                            try{
+                                receiptUri?.let{uri->
+                                    context.contentResolver.openInputStream(uri)?.use{input->
+                                        destination.outputStream().use{output->input.copyTo(output)}
+                                    }
+                                }
+                            }catch(_:Exception){}
+                            db.addReceipt(receiptDate,liters,receiptFuel,total,
+                                if(destination.exists())destination.absolutePath else "")
+                            receiptReview=false;revision++
+                            message="Tankovanie bolo uložené oddelene od jázd."
+                        }
+                    }){Text("Uložiť bloček")}})
+                if(selectedDrive!=null) {
+                    DriveDetails(selectedDrive!!,onBack={selectedDrive=null})
+                }
                 if(message.isNotEmpty()) AlertDialog(onDismissRequest={message=""},confirmButton={TextButton(onClick={message=""}){Text("OK")}},
                     text={Text(message)})
             }
