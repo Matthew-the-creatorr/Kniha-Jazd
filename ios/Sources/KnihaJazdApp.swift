@@ -42,7 +42,7 @@ struct StoreBlob: Codable {
 }
 func dayText(_ date:Date)->String {date.formatted(.dateTime.day().month().year())}
 func clockText(_ date:Date)->String {date.formatted(.dateTime.hour().minute())}
-func kilometers(_ km:Double)->String {String(format:"%.1f km",km)}
+func kilometers(_ km:Double)->String {String(format:"%0.1f km",km)}
 func durationText(_ start:Date,_ end:Date)->String {
     let minCount=max(0,Int(end.timeIntervalSince(start)/60))
     return minCount>=60 ? "\(minCount/60) h \(minCount%60) min" : "\(minCount) min"
@@ -63,10 +63,10 @@ func durationText(_ start:Date,_ end:Date)->String {
             data.privateKm-=224
             var day=Calendar.current.startOfDay(for:Date())
             while Calendar.current.isDateInWeekend(day){day=Calendar.current.date(byAdding:.day,value:1,to:day)!}
-            let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360...479)*60))
-            let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
-            let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110...150)*60))
-            let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
+            let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360..0.479)*60))
+            let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90..0.120)*60))
+            let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110..0.150)*60))
+            let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90..0.120)*60))
             data.pending.append(PairDraft(first:departure,firstEnd:firstEnd,second:back,secondEnd:secondEnd))
         }
         persist()
@@ -192,7 +192,7 @@ struct CameraPicker:UIViewControllerRepresentable {
     var completed:(UIImage?)->Void
     func makeUIViewController(context:Context)->UIImagePickerController {
         let picker=UIImagePickerController()
-        picker.sourceType=.camera
+        picker.sourceType = .camera
         picker.delegate=context.coordinator
         return picker
     }
@@ -276,8 +276,8 @@ struct ContentView:View {
                     tabButton("point.topleft.down.to.point.bottomright.curvepath",index:0)
                     tabButton("chart.bar.fill",index:1)
                     tabButton("car.fill",index:2)
-                }.padding(8).background(.black.opacity(.8),in:Capsule())
-                    .overlay(Capsule().stroke(Color.purple.opacity(.7)))
+                }.padding(8).background(.black.opacity(0.8),in:Capsule())
+                    .overlay(Capsule().stroke(Color.purple.opacity(0.7)))
             }.padding(.horizontal,16).padding(.top,12).padding(.bottom,10)
         }
         .onAppear {
@@ -431,7 +431,7 @@ struct ContentView:View {
             Text("Súkromný zostatok: "+kilometers(journal.data.privateKm))
             Text("Počet záznamov: \(journal.data.trips.count)")
             Text("Tankovania: \(journal.data.receipts.count)")
-            Text("Priemerná spotreba: \(journal.data.averageFuel,specifier:"%.1f") l/100 km")
+            Text("Priemerná spotreba: \(journal.data.averageFuel,specifier:"%0.1f") l/100 km")
         }.padding(15).neonCard()
     }
     private var vehiclePage:some View{
@@ -451,12 +451,12 @@ struct ContentView:View {
     private func tabButton(_ icon:String,index:Int)->some View {
         Button{tab=index}label:{
             Image(systemName:icon).font(.title3).frame(maxWidth:.infinity).padding(12)
-                .background(tab==index ? Color.purple.opacity(.55):Color.clear,in:Capsule())
+                .background(tab==index ? Color.purple.opacity(0.55):Color.clear,in:Capsule())
         }
     }
     private var coveredGarage:some View {
         ZStack {
-            Color(red:.035,green:.039,blue:.08)
+            Color(red:0.035,green:0.039,blue:0.08)
             if let image=garageImage {
                 Image(uiImage:image).resizable().scaledToFill().ignoresSafeArea()
             }else {
@@ -468,11 +468,11 @@ struct ContentView:View {
                             var beam=Path()
                             beam.move(to:CGPoint(x:w*0.04,y:h*(0.12+Double(row)*0.066)))
                             beam.addLine(to:CGPoint(x:w*0.96,y:h*(0.09+Double(row)*0.066)))
-                            ctx.stroke(beam,with:.color(.white.opacity(.4)),lineWidth:2)
+                            ctx.stroke(beam,with:.color(.white.opacity(0.4)),lineWidth:2)
                         }
                         let rect=CGRect(x:w*0.09,y:h*0.41,width:w*0.82,height:h*0.19)
                         let car=Path(roundedRect:rect,cornerRadius:CGFloat(45))
-                        ctx.fill(car,with:.linearGradient(Gradient(colors:[.gray,.white,.white.opacity(.75),.gray]),
+                        ctx.fill(car,with:.linearGradient(Gradient(colors:[.gray,.white,.white.opacity(0.75),.gray]),
                             startPoint:CGPoint(x:w*0.15,y:h*0.38),endPoint:CGPoint(x:w*0.8,y:h*0.65)))
                     }
                 }
@@ -485,16 +485,16 @@ struct NeonCircle:ButtonStyle {
     func makeBody(configuration:Configuration)->some View{
         configuration.label.font(.headline)
             .frame(width:43,height:43)
-            .background(.black.opacity(.75),in:Circle())
-            .overlay(Circle().stroke(Color.purple.opacity(.8)))
+            .background(.black.opacity(0.75),in:Circle())
+            .overlay(Circle().stroke(Color.purple.opacity(0.8)))
             .foregroundStyle(.white).opacity(configuration.isPressed ? 0.7:1)
     }
 }
 struct NeonCard:ViewModifier {
     func body(content:Content)->some View {
-        content.background(Color(red:.08,green:.07,blue:.14).opacity(.93),in:RoundedRectangle(cornerRadius:22))
-            .overlay(RoundedRectangle(cornerRadius:22).stroke(Color.purple.opacity(.8),lineWidth:1))
-            .shadow(color:.purple.opacity(.3),radius:10)
+        content.background(Color(red:0.08,green:0.07,blue:0.14).opacity(0.93),in:RoundedRectangle(cornerRadius:22))
+            .overlay(RoundedRectangle(cornerRadius:22).stroke(Color.purple.opacity(0.8),lineWidth:1))
+            .shadow(color:.purple.opacity(0.3),radius:10)
     }
 }
 extension View{func neonCard()->some View{modifier(NeonCard())}}
@@ -510,7 +510,7 @@ struct TripCard:View {
                 }
                 Spacer()
                 Text(trip.kind).font(.system(size:9)).padding(5)
-                    .background(Color.purple.opacity(.5),in:Capsule())
+                    .background(Color.purple.opacity(0.5),in:Capsule())
             }
             Divider()
             HStack(spacing:4){
@@ -520,12 +520,12 @@ struct TripCard:View {
                 Spacer()
                 Text(kilometers(trip.km))
                 Spacer()
-                Text(trip.liters>0 ? String(format:"%.1f l",trip.liters):"— l")
+                Text(trip.liters>0 ? String(format:"%0.1f l",trip.liters):"— l")
                 Spacer()
-                Text(trip.cost>0 ? String(format:"%.2f €",trip.cost):"— €")
+                Text(trip.cost>0 ? String(format:"%0.2f €",trip.cost):"— €")
             }.font(.system(size:8,weight:.medium))
-        }.padding(10).background(Color.black.opacity(.38),in:RoundedRectangle(cornerRadius:14))
-            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.purple.opacity(.9)))
+        }.padding(10).background(Color.black.opacity(0.38),in:RoundedRectangle(cornerRadius:14))
+            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.purple.opacity(0.9)))
     }
 }
 struct TripDetail:View {
@@ -548,8 +548,8 @@ struct TripDetail:View {
                     LabeledContent("Trvanie",value:durationText(trip.start,trip.end))
                     LabeledContent("Kilometre",value:kilometers(trip.km))
                     LabeledContent("Palivo",value:trip.fuel)
-                    LabeledContent("Spotreba",value:String(format:"%.1f l (odhad)",trip.liters))
-                    LabeledContent("Náklady",value:String(format:"%.2f € (odhad)",trip.cost))
+                    LabeledContent("Spotreba",value:String(format:"%0.1f l (odhad)",trip.liters))
+                    LabeledContent("Náklady",value:String(format:"%0.2f € (odhad)",trip.cost))
                 }
             }.navigationTitle("Podrobnosti jazdy")
                 .toolbar{ToolbarItem(placement:.topBarLeading){Button("Späť"){dismiss()}}}
