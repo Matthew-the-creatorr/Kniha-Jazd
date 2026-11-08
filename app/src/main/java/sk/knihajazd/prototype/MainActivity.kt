@@ -256,7 +256,7 @@ private fun MainApp() {
         }
     }
     val userPhoto = remember(customPhotoPath, photoRevision,carSpec) {
-        if(customPhotoPath.isEmpty() || p.getString("custom_photo_spec","") != carSpec) null else try {
+        if(customPhotoPath.isEmpty()) null else try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(customPhotoPath, bounds)
             val longest = maxOf(bounds.outWidth, bounds.outHeight)
@@ -281,24 +281,10 @@ private fun MainApp() {
         onBackground=Bright,surface=Color(0xFF1C2030),onSurface=Bright,onSurfaceVariant=Muted)) {
         CompositionLocalProvider(LocalContentColor provides Bright) {
             Box(Modifier.fillMaxSize().background(Charcoal)) {
-                if(userPhoto != null || generatedPhoto != null || isKodiaqSilver ||
-                    (chosenBrand=="Porsche" && chosenModel=="Panamera")) {
-                    Image(
-                        painter=when {
-                            userPhoto != null -> BitmapPainter(userPhoto)
-                            generatedPhoto != null -> BitmapPainter(generatedPhoto)
-                            isKodiaqSilver -> painterResource(R.drawable.garage_kodiaq_silver)
-                            else -> painterResource(photoDrawable)
-                        },
-                        contentDescription="Vybraná fotografia alebo AI obrázok vozidla",
-                        contentScale=ContentScale.Crop,
-                        alignment=Alignment.TopCenter,
-                        modifier=Modifier.fillMaxSize().graphicsLayer {
-                            translationX=pan
-                            scaleX=1.04f
-                            scaleY=1.04f
-                        }
-                    )
+                if(userPhoto != null) {
+                    Image(painter=BitmapPainter(userPhoto),contentDescription="Vlastné pozadie vozidla",
+                        contentScale=ContentScale.Crop,alignment=Alignment.TopCenter,
+                        modifier=Modifier.fillMaxSize().graphicsLayer{translationX=pan;scaleX=1.04f;scaleY=1.04f})
                 } else {
                     EmptyShowroom()
                 }
@@ -357,11 +343,11 @@ private fun MainApp() {
                                     photoRevision++
                                 }) { Text("Odstrániť vlastnú fotku") }
                             }
-                            Text("Bez vytvoreného AI obrázka sa cudzie auto nebude vydávať za vybraný model.",
+                            Text("Bez vlastnej fotografie sa zobrazí garáž s autom pod bielou plachtou.",
                                 fontSize=11.sp,color=Muted)
-                            if (isKodiaqSilver) Text("Vlastné realistické pozadie Škoda Kodiaq je pripravené.",
+                            if (isKodiaqSilver) Text("Fotku môžeš neskôr kedykoľvek zmeniť alebo odstrániť.",
                                 color=Violet,fontSize=12.sp)
-                            else Text("Pre tento model môžeš použiť vlastnú fotografiu. Online generovanie ešte nie je aktivované.",
+                            else Text("Fotku môžeš neskôr kedykoľvek zmeniť alebo odstrániť.",
                                 color=Muted,fontSize=12.sp)
                         } }
                         item {
@@ -528,16 +514,11 @@ private fun MainApp() {
                                                     customPhotoPath=""
                                                     p.edit().remove("custom_photo").remove("custom_photo_spec").apply()
                                                     photoRevision++
-                                                }){Text("Vrátiť sa na AI showroom")}
+                                                }){Text("Vrátiť predvolenú garáž")}
                                             }
                                             Text(
-                                                when {
-                                                    userPhoto != null -> "Zobrazuje sa tvoja vlastná fotografia."
-                                                    generatedPhoto != null -> "Zobrazuje sa AI pozadie pre vybraný model."
-                                                    isKodiaqSilver -> "Pripravené AI pozadie Škoda Kodiaq v striebornej farbe."
-                                                    chosenBrand=="Porsche" && chosenModel=="Panamera" -> "Ukážka Porsche Panamera."
-                                                    else -> "AI obrázok zatiaľ chýba. Preto je zobrazená prázdna garáž, nie cudzie auto."
-                                                },
+                                                if(userPhoto!=null) "Zobrazuje sa tvoja vlastná fotografia. Zmeniť ju môžeš kedykoľvek."
+                                                else "Predvolené pozadie: garáž s autom pod bielou plachtou.",
                                                 color=Muted,fontSize=10.sp
                                             )
                                         }
@@ -803,17 +784,41 @@ private fun decodeVehicleBitmap(path:String): androidx.compose.ui.graphics.Image
 
 @Composable private fun EmptyShowroom(){
     Canvas(Modifier.fillMaxSize()) {
-        drawRect(brush=Brush.verticalGradient(listOf(Color(0xFF05060B),Color(0xFF1B202A),Color(0xFF080A0F))))
-        val w=size.width; val h=size.height
-        val white=Color.White.copy(alpha=.65f)
-        for(i in 0..4) {
-            val y=h*(.15f+i*.075f)
-            drawLine(white,Offset(w*.05f,y),Offset(w*.94f,y-h*.06f),2.6f)
+        val w=size.width;val h=size.height
+        drawRect(brush=Brush.verticalGradient(listOf(Color(0xFF03050B),Color(0xFF181C27),Color(0xFF080A0F))))
+        val white=Color.White.copy(alpha=.7f)
+        for(i in 0..4){
+            val y=h*(.11f+i*.065f)
+            drawLine(white,Offset(w*.03f,y),Offset(w*.97f,y-h*.035f),2.5f)
         }
-        for(i in 0..3) {
-            val x=w*(i+.5f)/4f
-            drawLine(white.copy(alpha=.4f),Offset(x,h*.16f),Offset(x,h*.52f),2f)
+        for(i in 0..3){
+            val x=w*(i+.6f)/4.6f
+            drawLine(white.copy(alpha=.25f),Offset(x,h*.15f),Offset(x,h*.6f),2f)
         }
-        drawLine(white.copy(alpha=.23f),Offset(0f,h*.55f),Offset(w,h*.55f),3f)
+        val floor=h*.61f
+        drawRect(brush=Brush.verticalGradient(listOf(Color(0xFF222634),Color(0xFF05070E))),
+            topLeft=Offset(0f,floor),size=androidx.compose.ui.geometry.Size(w,h-floor))
+        drawOval(color=Color.Black.copy(alpha=.75f),
+            topLeft=Offset(w*.07f,h*.48f),
+            size=androidx.compose.ui.geometry.Size(w*.86f,h*.18f))
+        val cloth=Path().apply{
+            moveTo(w*.12f,h*.57f)
+            cubicTo(w*.13f,h*.51f,w*.2f,h*.47f,w*.29f,h*.46f)
+            cubicTo(w*.35f,h*.41f,w*.4f,h*.37f,w*.52f,h*.37f)
+            cubicTo(w*.64f,h*.37f,w*.72f,h*.42f,w*.78f,h*.47f)
+            cubicTo(w*.84f,h*.48f,w*.89f,h*.51f,w*.89f,h*.57f)
+            lineTo(w*.86f,h*.63f)
+            cubicTo(w*.78f,h*.64f,w*.71f,h*.61f,w*.61f,h*.63f)
+            cubicTo(w*.49f,h*.65f,w*.38f,h*.61f,w*.28f,h*.63f)
+            cubicTo(w*.2f,h*.64f,w*.14f,h*.62f,w*.12f,h*.57f)
+            close()
+        }
+        drawPath(path=cloth,brush=Brush.linearGradient(listOf(
+            Color(0xFF979CAA),Color(0xFFF4F4F6),Color(0xFFBAC0CE),Color(0xFFFFFFFF),Color(0xFF777D8C)),
+            start=Offset(w*.18f,h*.4f),end=Offset(w*.86f,h*.67f)))
+        drawLine(color=Color.White.copy(alpha=.48f),start=Offset(w*.3f,h*.46f),end=Offset(w*.75f,h*.47f),strokeWidth=2f)
+        drawLine(color=Color(0xFF9198A6),start=Offset(w*.51f,h*.39f),end=Offset(w*.48f,h*.59f),strokeWidth=1.7f)
+        drawLine(color=Color(0xFFABB0BC),start=Offset(w*.2f,h*.54f),end=Offset(w*.24f,h*.63f),strokeWidth=2f)
+        drawLine(color=Color(0xFFADB2BE),start=Offset(w*.81f,h*.53f),end=Offset(w*.77f,h*.63f),strokeWidth=2f)
     }
 }
