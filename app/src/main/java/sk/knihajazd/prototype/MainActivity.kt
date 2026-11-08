@@ -1,6 +1,15 @@
 package sk.knihajazd.prototype
 
 import android.os.Bundle
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import android.content.Context
 import android.graphics.BitmapFactory
 import java.io.File
@@ -122,6 +131,37 @@ private fun MainApp() {
     var showDetails by remember { mutableStateOf(false) }
     var privacy by remember { mutableStateOf("Služobná") }
     var message by remember { mutableStateOf("") }
+    val db = remember(context) { DriveDatabase(context.applicationContext) }
+    var revision by remember { mutableIntStateOf(0) }
+    val journeys = remember(revision) { db.journeys() }
+    val receipts = remember(revision) { db.receipts() }
+    var selectedDrive by remember { mutableStateOf<DriveRecord?>(null) }
+    var firstTown by remember { mutableStateOf("Neznáme miesto") }
+    var lastTown by remember { mutableStateOf("Neznáme miesto") }
+    var visibleSeconds by remember { mutableLongStateOf(0L) }
+    var averageFuel by remember { mutableStateOf(db.getSetting("avg_fuel","6.5")) }
+    var receiptUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingReceiptFile by remember { mutableStateOf<File?>(null) }
+    var receiptReview by remember { mutableStateOf(false) }
+    var receiptDate by remember { mutableStateOf("") }
+    var receiptLiters by remember { mutableStateOf("") }
+    var receiptFuel by remember { mutableStateOf("") }
+    var receiptTotal by remember { mutableStateOf("") }
+    LaunchedEffect(LiveDrive.active) {
+        while(LiveDrive.active) {
+            visibleSeconds=(android.os.SystemClock.elapsedRealtime()-LiveDrive.startElapsed)/1000L
+            delay(1000)
+        }
+    }
+    LaunchedEffect(setup,revision) {
+        while(!setup) {
+            if(db.eligiblePair()!=null && !showAlerts) {
+                showAlerts=true
+                break
+            }
+            delay(60000)
+        }
+    }
     var customPhotoPath by remember { mutableStateOf(p.getString("custom_photo","") ?: "") }
     var photoRevision by remember { mutableIntStateOf(0) }
     val chosenBrand = if(brand=="Iná značka") customBrand.trim() else brand.trim()
@@ -177,6 +217,42 @@ private fun MainApp() {
             } catch (e: Exception) {
                 message = "Fotografiu sa nepodarilo načítať. Skús inú."
             }
+        }
+    }
+
+    fun processReceipt(uri:Uri) {
+        receiptUri=uri
+        ReceiptReader.recognize(context,uri) { found ->
+            if(found==null) message="Nepodarilo sa prečítať obrázok. Skús ostrejšiu fotku."
+            else {
+                receiptDate=found.date.ifBlank {dateFormat(System.currentTimeMillis())}
+                receiptLiters=found.liters
+                receiptFuel=found.fuel
+                receiptTotal=found.amount
+                receiptReview=true
+            }
+        }
+    }
+    val receiptCamera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) {ok->
+        if(ok) pendingReceiptFile?.let { target ->
+            val uri=FileProvider.getUriForFile(context,context.packageName+".fileprovider",target)
+            processReceipt(uri)
+        } else message="Fotografovanie bolo zrušené."
+    }
+    val receiptGallery = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {uri->
+        if(uri!=null)processReceipt(uri)
+    }
+    val gpsPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {granted->
+        if(granted[Manifest.permission.ACCESS_FINE_LOCATION]==true) {
+            ContextCompat.startForegroundService(context,Intent(context,DrivingService::class.java).apply{action="START"})
+        } else message="GPS vyžaduje povolenie presnej polohy. V nastaveniach povoľ presnú polohu."
+    }
+    val beginDrive:()->Unit={
+        if(LiveDrive.active) message="Jazda už prebieha."
+        else if(ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED){
+            ContextCompat.startForegroundService(context,Intent(context,DrivingService::class.java).apply{action="START"})
+        } else {
+            gpsPermissions.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.POST_NOTIFICATIONS))
         }
     }
     val userPhoto = remember(customPhotoPath, photoRevision,carSpec) {
@@ -303,7 +379,7 @@ private fun MainApp() {
                                 shape=RoundedCornerShape(18.dp),
                                 colors=ButtonDefaults.buttonColors(containerColor=Violet)
                             ) { Text("Vstúpiť do garáže",fontWeight=FontWeight.Bold,color=Color(0xFF10051E)) }
-                            Text("V0.5 · Vybraný model sa nezamieňa s Porsche. Heslo sa neukladá.",
+                            Text("V0.6 · GPS záznam a súkromné kilometre. Heslo sa neukladá.",
                                 fontSize=11.sp,color=Muted,modifier=Modifier.padding(top=8.dp,bottom=40.dp))
                         }
                     }
@@ -329,19 +405,42 @@ private fun MainApp() {
                             Text("◢",fontSize=31.sp,fontWeight=FontWeight.Black,color=Violet)
                             Column(Modifier.weight(1f).padding(start=9.dp)) {
                                 Text("Kniha jázd",fontSize=20.sp,fontWeight=FontWeight.ExtraBold,color=Bright)
-                                Text("Firemná evidencia · DEMO",fontSize=11.sp,color=Muted)
+                                Text("Evidencia jázd · v0.6",fontSize=11.sp,color=Muted)
                             }
-                            HeaderButton(Icons.Rounded.PlayArrow,"Štart",true){isTrip=true;isPaused=false}
-                            Spacer(Modifier.width(7.dp))
+                            HeaderButton(Icons.Rounded.PlayArrow,"Štart",true){beginDrive()}
+                            Spacer(Modifier.width(5.dp))
+                            HeaderButton(Icons.Rounded.PhotoCamera,"Tankovací bloček",false){
+                                try {
+                                    val temp=File(context.cacheDir,"receipt_"+System.currentTimeMillis()+".jpg")
+                                    pendingReceiptFile=temp
+                                    receiptCamera.launch(FileProvider.getUriForFile(context,context.packageName+".fileprovider",temp))
+                                }catch(e:Exception){message="Fotoaparát sa nepodarilo otvoriť: "+(e.message?:"")}
+                            }
+                            Spacer(Modifier.width(5.dp))
                             HeaderButton(Icons.Rounded.NotificationsNone,"Upozornenia",false){showAlerts=true}
                             Spacer(Modifier.width(7.dp))
                             HeaderButton(Icons.Rounded.PersonOutline,"Profil",false){showProfile=true}
                         }
-                        if(isTrip) GlassPanel(Modifier.padding(horizontal=15.dp).padding(top=8.dp)) {
+                        if(LiveDrive.active) GlassPanel(Modifier.padding(horizontal=15.dp).padding(top=8.dp)) {
                             Row(verticalAlignment=Alignment.CenterVertically) {
-                                Text(if(isPaused)"Trasa • Pozastavená" else "● Trasa • Demo",color=Violet,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
-                                TextButton(onClick={isPaused=!isPaused}) { Text(if(isPaused)"Pokračovať" else "Stop") }
-                                TextButton(onClick={showFinish=true}){Text("Koniec")}
+                                Column(Modifier.weight(1f)) {
+                                    Text("● GPS jazda prebieha",color=Violet,fontWeight=FontWeight.SemiBold)
+                                    Text(durationFormat(visibleSeconds*1000L)+" · "+shownKm(LiveDrive.km),
+                                        fontSize=12.sp,color=Bright)
+                                    if(LiveDrive.gaps>0) Text("Výpadky GPS: "+LiveDrive.gaps,fontSize=10.sp,color=Muted)
+                                }
+                                TextButton(onClick={
+                                    val snap=LiveDrive.finish()
+                                    context.startService(Intent(context,DrivingService::class.java).apply{action="STOP"})
+                                    if(snap!=null) {
+                                        firstTown="Neznáme miesto";lastTown="Neznáme miesto"
+                                        scope.launch{
+                                            firstTown=withContext(Dispatchers.IO){cityFromLocation(context,snap.first)}
+                                            lastTown=withContext(Dispatchers.IO){cityFromLocation(context,snap.last)}
+                                        }
+                                        showFinish=true
+                                    }
+                                }){Text("Koniec")}
                             }
                         }
                         Text(
@@ -355,37 +454,7 @@ private fun MainApp() {
                                     verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                     when(page){
                                         0 -> GlassPanel {
-                                            Row(verticalAlignment=Alignment.CenterVertically) {
-                                                SquareIcon(Icons.Rounded.Route)
-                                                Spacer(Modifier.width(12.dp))
-                                                Column(Modifier.weight(1f)) {
-                                                    Text("Posledné jazdy",fontSize=21.sp,fontWeight=FontWeight.Bold)
-                                                    Text("Automatická evidencia",color=Muted,fontSize=11.sp)
-                                                }
-                                                IconButton(onClick={showDetails=!showDetails}) {
-                                                    Icon(if(showDetails)Icons.Rounded.KeyboardArrowDown else Icons.Rounded.ChevronRight,"Podrobnosti",tint=Bright)
-                                                }
-                                            }
-                                            HorizontalDivider(color=Violet.copy(alpha=.55f))
-                                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-                                                listOf("Dátum","Čas","Štart – Cieľ","Spotreba","Náklady").forEachIndexed { i,s ->
-                                                    Text(s,fontSize=if(i==2) 10.sp else 9.sp,fontWeight=FontWeight.Medium,
-                                                        color=Bright,modifier=Modifier.weight(if(i==2)1.5f else 1f),maxLines=1)
-                                                }
-                                            }
-                                            Spacer(Modifier.height(14.dp))
-                                            Icon(Icons.Rounded.DirectionsCar,contentDescription=null,tint=Muted,
-                                                modifier=Modifier.align(Alignment.CenterHorizontally).size(35.dp))
-                                            Text("Zatiaľ žiadne jazdy",fontSize=16.sp,fontWeight=FontWeight.Bold,
-                                                modifier=Modifier.align(Alignment.CenterHorizontally))
-                                            Text("Po aktivácii GPS sa tu objavia nové záznamy.",
-                                                color=Muted,fontSize=12.sp,
-                                                modifier=Modifier.align(Alignment.CenterHorizontally))
-                                            if(showDetails) {
-                                                HorizontalDivider(color=Color.White.copy(alpha=.14f))
-                                                Text("Zobrazenie detailov: dátum, čas, trasa, spotreba, náklady a fotografie.",
-                                                    fontSize=12.sp,color=Muted)
-                                            }
+                                            DrivesOverview(journeys,onOpen={selectedDrive=it})
                                         }
                                         1 -> GlassPanel {
                                             Row(verticalAlignment=Alignment.CenterVertically) {
@@ -397,12 +466,12 @@ private fun MainApp() {
                                                 }
                                             }
                                             Row(horizontalArrangement=Arrangement.spacedBy(9.dp)) {
-                                                Statistic("Kilometre","— km",Modifier.weight(1f))
-                                                Statistic("Spotreba","— l/100",Modifier.weight(1f))
+                                                Statistic("GPS kilometre",shownKm(journeys.filter{!it.simulated}.sumOf{it.km}),Modifier.weight(1f))
+                                                Statistic("Súkromný zostatok",shownKm(db.privateBalance()),Modifier.weight(1f))
                                             }
                                             Row(horizontalArrangement=Arrangement.spacedBy(9.dp)) {
-                                                Statistic("Palivo","— €",Modifier.weight(1f))
-                                                Statistic("Počet jázd","0",Modifier.weight(1f))
+                                                Statistic("Tankovania",receipts.size.toString(),Modifier.weight(1f))
+                                                Statistic("Počet jázd",journeys.size.toString(),Modifier.weight(1f))
                                             }
                                             Text("Najazdené kilometre · mesačne",color=Muted,fontSize=12.sp)
                                             Box(Modifier.fillMaxWidth().height(100.dp)
@@ -410,7 +479,7 @@ private fun MainApp() {
                                                 contentAlignment=Alignment.Center) {
                                                 Column(horizontalAlignment=Alignment.CenterHorizontally) {
                                                     Icon(Icons.Rounded.ShowChart,null,tint=Violet,modifier=Modifier.size(28.dp))
-                                                    Text("Zatiaľ bez údajov",color=Muted,fontSize=12.sp)
+                                                    Text("GPS a modelové jazdy sa evidujú osobitne.",color=Muted,fontSize=11.sp)
                                                 }
                                             }
                                         }
@@ -430,7 +499,18 @@ private fun MainApp() {
                                             InfoRow("ŠPZ / EČV",reg.ifBlank{"Nevyplnené"})
                                             InfoRow("Farba / povrch",paint+" · "+finish)
                                             InfoRow("Objem nádrže","Nevyplnené")
-                                            InfoRow("Spotreba","Čaká na údaje")
+                                            InfoRow("Spotreba",averageFuel+" l/100 km (odhad)")
+                                            OutlinedTextField(value=averageFuel,onValueChange={
+                                                averageFuel=it
+                                                val parsed=it.replace(',','.').toDoubleOrNull()
+                                                if(parsed!=null && parsed>0 && parsed<50) db.setSetting("avg_fuel",parsed.toString())
+                                            },label={Text("Priemerná spotreba (l/100 km)")},
+                                            singleLine=true,modifier=Modifier.fillMaxWidth())
+                                            OutlinedButton(onClick={receiptGallery.launch("image/*")},modifier=Modifier.fillMaxWidth()) {
+                                                Icon(Icons.Rounded.Receipt,null)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("Pridať bloček z galérie")
+                                            }
                                             if(isKodiaqSilver) Text("Pozadie Škoda Kodiaq – strieborná",
                                                 color=Violet,fontWeight=FontWeight.SemiBold)
                                             else Text("Pre tento model nie je pripravený AI obrázok. Použi vlastnú fotografiu.",
