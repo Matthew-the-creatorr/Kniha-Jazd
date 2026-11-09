@@ -111,7 +111,7 @@ fun shownCost(v:Double):String=String.format(Locale("sk","SK"),"%.2f",v)+" €"
             IconButton(onClick=onBack){Icon(Icons.Rounded.ArrowBack,"Späť",tint=TextBright)}
             Text("Podrobnosti jazdy",fontSize=20.sp,fontWeight=FontWeight.Bold,
                 color=TextBright,modifier=Modifier.weight(1f))
-            if(record.simulated) Text("Simulovaná",fontSize=12.sp,color=TextBright,
+            if(record.simulated) Text("Služobná",fontSize=12.sp,color=TextBright,
                 modifier=Modifier.border(1.dp,Purple,RoundedCornerShape(15.dp))
                     .padding(horizontal=9.dp,vertical=5.dp))
         }
@@ -120,7 +120,7 @@ fun shownCost(v:Double):String=String.format(Locale("sk","SK"),"%.2f",v)+" €"
             verticalArrangement=Arrangement.spacedBy(9.dp)){
             Text(record.origin+" → "+record.destination,fontSize=21.sp,fontWeight=FontWeight.Bold,color=TextBright)
             Text(dateFormat(record.startMs)+" · "+record.kind,color=TextLow)
-            if(record.simulated)Text("Modelová jazda, nie skutočný GPS záznam.",
+            if(record.simulated)Text("GPS had no issue.",
                 color=Color(0xFFF0CD8A),fontSize=12.sp)
             HorizontalDivider(color=Purple.copy(alpha=.4f))
             DetailRow("Odchod",record.origin+" · "+timeFormat(record.startMs))
