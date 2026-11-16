@@ -556,7 +556,7 @@ struct ContentView:View {
             Text(value).font(.subheadline.bold()).multilineTextAlignment(.trailing)
         }
     }
-    private func vehicleField(_ title:String,value:String,keyPath:ReferenceWritableKeyPath<StoreBlob,String?>)->some View {
+    private func vehicleField(_ title:String,value:String,keyPath:WritableKeyPath<StoreBlob,String?>)->some View {
         HStack {
             Text(title).font(.caption).foregroundStyle(.gray).frame(width:85,alignment:.leading)
             TextField(title,text:Binding(
