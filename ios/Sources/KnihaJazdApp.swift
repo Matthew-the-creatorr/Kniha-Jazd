@@ -670,31 +670,41 @@ extension View{func neonCard()->some View{modifier(NeonCard())}}
 struct TripCard:View {
     let trip:Trip
     var body:some View {
-        VStack(alignment:.leading,spacing:6){
-            HStack{
-                Image(systemName:"car.fill")
-                VStack(alignment:.leading,spacing:1){
-                    Text(trip.from+" – "+trip.to).font(.system(size:13,weight:.bold)).lineLimit(1)
-                    Text(clockText(trip.start)+" → "+clockText(trip.end)).font(.caption2).foregroundStyle(.gray)
-                }
-                Spacer()
-                Text(trip.kind).font(.system(size:9)).padding(5)
-                    .background(Color.purple.opacity(0.5),in:Capsule())
+        VStack(alignment:.leading,spacing:7){
+            HStack(alignment:.center,spacing:8) {
+                Image(systemName:"car.fill").foregroundStyle(.white)
+                VStack(alignment:.leading,spacing:2) {
+                    Text(trip.from).font(.system(size:13,weight:.bold)).lineLimit(1)
+                    Label(clockText(trip.start),systemImage:"clock")
+                        .font(.system(size:10)).foregroundStyle(.white.opacity(0.8))
+                }.frame(maxWidth:.infinity,alignment:.leading)
+                Text("–").font(.caption.bold()).foregroundStyle(.white.opacity(0.85))
+                VStack(alignment:.leading,spacing:2) {
+                    Text(trip.to).font(.system(size:13,weight:.bold)).lineLimit(1)
+                    Label(clockText(trip.end),systemImage:"clock")
+                        .font(.system(size:10)).foregroundStyle(.white.opacity(0.8))
+                }.frame(maxWidth:.infinity,alignment:.leading)
+                Text(trip.kind).font(.system(size:9))
+                    .padding(.horizontal,7).padding(.vertical,5)
+                    .background(Color.purple.opacity(0.58),in:Capsule())
+                    .overlay(Capsule().stroke(.purple.opacity(0.95)))
             }
-            Divider()
+            Divider().overlay(.purple.opacity(0.4))
             HStack(spacing:4){
                 Text(dayText(trip.start))
-                Spacer()
+                Spacer(minLength:1)
                 Text(durationText(trip.start,trip.end))
-                Spacer()
+                Spacer(minLength:1)
                 Text(kilometers(trip.km))
-                Spacer()
-                Text(trip.liters>0 ? String(format:"%0.1f l",trip.liters):"— l")
-                Spacer()
-                Text(trip.cost>0 ? String(format:"%0.2f €",trip.cost):"— €")
-            }.font(.system(size:8,weight:.medium))
-        }.padding(10).background(Color.black.opacity(0.38),in:RoundedRectangle(cornerRadius:14))
-            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.purple.opacity(0.9)))
+                Spacer(minLength:1)
+                Text(trip.liters>0 ? String(format:"%.1f l",trip.liters):"— l")
+                Spacer(minLength:1)
+                Text(trip.cost>0 ? String(format:"%.2f €",trip.cost):"— €")
+            }.font(.system(size:8,weight:.medium)).lineLimit(1)
+        }
+        .padding(10)
+        .background(Color.black.opacity(0.52),in:RoundedRectangle(cornerRadius:15))
+        .overlay(RoundedRectangle(cornerRadius:15).stroke(.purple.opacity(0.95),lineWidth:1.25))
     }
 }
 struct TripDetail:View {
@@ -717,11 +727,17 @@ struct TripDetail:View {
                     LabeledContent("Trvanie",value:durationText(trip.start,trip.end))
                     LabeledContent("Kilometre",value:kilometers(trip.km))
                     LabeledContent("Palivo",value:trip.fuel)
-                    LabeledContent("Spotreba",value:String(format:"%0.1f l (odhad)",trip.liters))
-                    LabeledContent("Náklady",value:String(format:"%0.2f € (odhad)",trip.cost))
+                    LabeledContent("Spotreba",value:String(format:"%.2f l (odhad)",trip.liters))
+                    if trip.simulated {
+                        LabeledContent("Priradené z bločkov",value:String(format:"%.2f l (odhad)",trip.allocatedFromReceipts ?? 0))
+                    }
+                    LabeledContent("Náklady",value:String(format:"%.2f € (odhad z bločkov)",trip.cost))
                 }
-            }.navigationTitle("Podrobnosti jazdy")
-                .toolbar{ToolbarItem(placement:.topBarLeading){Button("Späť"){dismiss()}}}
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(red:0.04,green:0.035,blue:0.075))
+            .navigationTitle("Podrobnosti jazdy")
+            .toolbar{ToolbarItem(placement:.topBarLeading){Button("Späť"){dismiss()}}}
         }
     }
 }
