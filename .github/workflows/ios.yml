@@ -16,6 +16,10 @@ jobs:
         run: |
           cd ios
           xcodegen generate --spec project.yml
+      - name: Verify private fuel calculations
+        run: |
+          swiftc -parse-as-library ios/Sources/PrivateFuel.swift ios/Tests/FuelRegression.swift -o /tmp/kniha-fuel-tests
+          /tmp/kniha-fuel-tests
       - name: Build for iOS Simulator (no signing required)
         run: |
           cd ios
