@@ -135,11 +135,13 @@ private fun MainApp() {
     var revision by remember { mutableIntStateOf(0) }
     val journeys = remember(revision) { db.journeys() }
     val receipts = remember(revision) { db.receipts() }
+    val privateFuel = remember(revision) { db.privateFuelSummary() }
     var selectedDrive by remember { mutableStateOf<DriveRecord?>(null) }
     var firstTown by remember { mutableStateOf("Neznáme miesto") }
     var lastTown by remember { mutableStateOf("Neznáme miesto") }
     var visibleSeconds by remember { mutableLongStateOf(0L) }
     var averageFuel by remember { mutableStateOf(db.getSetting("avg_fuel","6.5")) }
+    var selectedFuel by remember { mutableStateOf(db.getSetting("fuel_type","Nezadané")) }
     var receiptUri by remember { mutableStateOf<Uri?>(null) }
     var pendingReceiptFile by remember { mutableStateOf<File?>(null) }
     var receiptReview by remember { mutableStateOf(false) }
@@ -459,6 +461,23 @@ private fun MainApp() {
                                                 Statistic("Tankovania",receipts.size.toString(),Modifier.weight(1f))
                                                 Statistic("Počet jázd",journeys.size.toString(),Modifier.weight(1f))
                                             }
+                                            Row(horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                                                Statistic("Palivo na súkromné km",shownLiters(privateFuel.allocatedLiters),Modifier.weight(1f))
+                                                Statistic("Zostatok z bločkov",shownLiters(privateFuel.unallocatedPurchasedLiters),Modifier.weight(1f))
+                                            }
+                                            Text("Celkovo súkromné km: "+shownKm(privateFuel.privateKm)+
+                                                " · odhadovaná spotreba: "+shownLiters(privateFuel.estimatedConsumptionLiters),
+                                                fontSize=11.sp,color=Muted)
+                                            if(privateFuel.consumptionNotCoveredLiters>0)
+                                                Text("Zatiaľ bez doloženého tankovania: "+
+                                                    shownLiters(privateFuel.consumptionNotCoveredLiters),
+                                                    fontSize=11.sp,color=Muted)
+                                            if(privateFuel.excludedReceipts>0)
+                                                Text("Nepriradené bločky s iným alebo nezisteným palivom: "+
+                                                    privateFuel.excludedReceipts,
+                                                    fontSize=11.sp,color=Muted)
+                                            Text("Palivo sa rozpočíta podľa súkromných km a nastavenej spotreby. Ide o odhad, nie meranie spotreby.",
+                                                fontSize=11.sp,color=Muted)
                                             Text("Najazdené kilometre · mesačne",color=Muted,fontSize=12.sp)
                                             Box(Modifier.fillMaxWidth().height(100.dp)
                                                 .border(1.dp,Color.White.copy(alpha=.1f),RoundedCornerShape(12.dp)),
@@ -486,10 +505,18 @@ private fun MainApp() {
                                             InfoRow("Farba / povrch",paint+" · "+finish)
                                             InfoRow("Objem nádrže","Nevyplnené")
                                             InfoRow("Spotreba",averageFuel+" l/100 km (odhad)")
+                                            Pick("Palivo vozidla",listOf("Nezadané","Diesel B7","Benzín E5","Benzín E10"),selectedFuel) {
+                                                selectedFuel=it
+                                                db.setSetting("fuel_type",it)
+                                                revision++
+                                            }
                                             OutlinedTextField(value=averageFuel,onValueChange={
                                                 averageFuel=it
                                                 val parsed=it.replace(',','.').toDoubleOrNull()
-                                                if(parsed!=null && parsed>0 && parsed<50) db.setSetting("avg_fuel",parsed.toString())
+                                                if(parsed!=null && parsed>0 && parsed<50){
+                                                    db.setSetting("avg_fuel",parsed.toString())
+                                                    revision++
+                                                }
                                             },label={Text("Priemerná spotreba (l/100 km)")},
                                             singleLine=true,modifier=Modifier.fillMaxWidth())
                                             OutlinedButton(onClick={receiptGallery.launch("image/*")},modifier=Modifier.fillMaxWidth()) {
@@ -637,7 +664,7 @@ private fun MainApp() {
                         DemoTextField(receiptLiters,{receiptLiters=it},"Natankované litre")
                         DemoTextField(receiptFuel,{receiptFuel=it},"Palivo (Diesel B7 / Benzín E10)")
                         DemoTextField(receiptTotal,{receiptTotal=it},"Celková cena €")
-                        Text("Bločky sú samostatné tankovania, nie automaticky spotreba jázd.",
+                        Text("Po uložení bločku sa jeho palivo automaticky rozpočíta podľa súkromných km a odhadovanej spotreby. Prebytok zostane v evidencii.",
                             color=Muted,fontSize=11.sp)
                     }},
                     dismissButton={TextButton(onClick={receiptReview=false}){Text("Zrušiť")}},
@@ -658,7 +685,14 @@ private fun MainApp() {
                             db.addReceipt(receiptDate,liters,receiptFuel,total,
                                 if(destination.exists())destination.absolutePath else "")
                             receiptReview=false;revision++
-                            message="Tankovanie bolo uložené oddelene od jázd."
+                            val summary=db.privateFuelSummary()
+                            selectedFuel=db.getSetting("fuel_type","Nezadané")
+                            message="Tankovanie uložené. Na súkromné kilometre automaticky rozpočítaných "+
+                                shownLiters(summary.allocatedLiters)+" (odhad), zostatok z bločkov: "+
+                                shownLiters(summary.unallocatedPurchasedLiters)+
+                                if(PrivateFuelAllocator.fuelClass(receiptFuel)!=
+                                    PrivateFuelAllocator.fuelClass(selectedFuel))
+                                    ". Tento bloček má iný druh paliva a zatiaľ sa nezapočítal." else ""
                         }
                     }){Text("Uložiť bloček")}})
                 if(selectedDrive!=null) {
