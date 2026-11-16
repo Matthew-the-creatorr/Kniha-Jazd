@@ -24,6 +24,10 @@ jobs:
         run: |
           cd ios
           xcodebuild -project KnihaJazd.xcodeproj -scheme KnihaJazd -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Compile iPhone device target (unsigned validation)
+        run: |
+          cd ios
+          xcodebuild -project KnihaJazd.xcodeproj -scheme KnihaJazd -configuration Debug -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO build
       - name: Pack simulator app
         run: |
           ditto -c -k --sequesterRsrc --keepParent ios/build/Build/Products/Debug-iphonesimulator/KnihaJazd.app ios/KnihaJazd-v0.6-Simulator.zip
