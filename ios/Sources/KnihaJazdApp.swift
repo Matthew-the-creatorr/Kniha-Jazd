@@ -17,6 +17,8 @@ struct Trip: Codable, Identifiable {
     var liters: Double
     var fuel: String
     var cost: Double
+    /// Part of estimated consumption covered by the stored compatible fuel receipts.
+    var allocatedFromReceipts: Double? = nil
 }
 struct PairDraft: Codable, Identifiable {
     var id=UUID()
@@ -32,6 +34,7 @@ struct FuelEntry: Codable, Identifiable {
     var liters:Double
     var fuel:String
     var cost:Double
+    var photoFile:String?=nil
 }
 struct StoreBlob: Codable {
     var trips:[Trip]=[]
@@ -39,6 +42,13 @@ struct StoreBlob: Codable {
     var receipts:[FuelEntry]=[]
     var privateKm:Double=0
     var averageFuel:Double=6.5
+    var fuelType:String?=nil
+    var carBrand:String?=nil
+    var carModel:String?=nil
+    var carYear:String?=nil
+    var carPlate:String?=nil
+    var carColor:String?=nil
+    var carFinish:String?=nil
 }
 func dayText(_ date:Date)->String {date.formatted(.dateTime.day().month().year())}
 func clockText(_ date:Date)->String {date.formatted(.dateTime.hour().minute())}
@@ -52,47 +62,102 @@ func durationText(_ start:Date,_ end:Date)->String {
     private var url:URL {
         FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("journal-v06.json")
     }
-    init(){if let raw=try? Data(contentsOf:url),let saved=try? JSONDecoder().decode(StoreBlob.self,from:raw){data=saved}}
-    func persist(){if let bytes=try? JSONEncoder().encode(data){try? bytes.write(to:url,options:.atomic)}}
-    var sorted:[Trip]{data.trips.sorted{$0.end>$1.end}}
+    init() {
+        if let raw=try? Data(contentsOf:url), let saved=try? JSONDecoder().decode(StoreBlob.self,from:raw){
+            data=saved
+        }
+        reallocateFuel()
+    }
+    func persist() {
+        guard let bytes=try? JSONEncoder().encode(data) else{return}
+        do {
+            try bytes.write(to:url,options:.atomic)
+            try FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
+        }catch { print("Unable to persist journal: \(error.localizedDescription)") }
+    }
+    var sorted:[Trip] {data.trips.sorted { $0.end > $1.end }}
+    var privateTotalKm:Double {
+        let savedModelKm=data.trips.filter{$0.simulated}.reduce(0){$0+$1.km}
+        return data.privateKm + Double(data.pending.count)*224.0 + savedModelKm
+    }
+    var vehicleFuel:String {data.fuelType ?? "Nezadané"}
+    var fuelSummary:FuelAllocation {
+        PrivateFuelCalculator.calculate(
+            distanceKm:privateTotalKm,
+            litersPer100Km:data.averageFuel,
+            receipts:data.receipts.map{($0.liters,$0.cost,$0.fuel)},
+            vehicleFuel:vehicleFuel
+        )
+    }
+    func reallocateFuel() {
+        let summary=fuelSummary
+        let validRate=data.averageFuel.isFinite && data.averageFuel>0 && data.averageFuel<=50 ? data.averageFuel : 6.5
+        for i in data.trips.indices where data.trips[i].simulated {
+            let estimated=data.trips[i].km*validRate/100.0
+            let allocated=estimated*summary.coveredFraction
+            data.trips[i].liters=estimated
+            data.trips[i].allocatedFromReceipts=allocated
+            data.trips[i].cost=allocated*summary.averagePrice
+            data.trips[i].fuel=vehicleFuel
+        }
+        persist()
+    }
+    func setFuel(_ newFuel:String) {
+        data.fuelType=newFuel
+        reallocateFuel()
+    }
+    func setAverageFuel(_ rate:Double) {
+        guard rate.isFinite && rate>0 && rate<=50 else{return}
+        data.averageFuel=rate
+        reallocateFuel()
+    }
     func saveReal(_ trip:Trip){data.trips.append(trip);persist()}
-    func addPrivate(_ km:Double){
+    func addPrivate(_ km:Double) {
         guard km.isFinite && km>0 else{return}
-        data.privateKm+=km
+        data.privateKm += km
         while data.privateKm>=224 {
-            data.privateKm-=224
+            data.privateKm -= 224
             var day=Calendar.current.startOfDay(for:Date())
-            while Calendar.current.isDateInWeekend(day){day=Calendar.current.date(byAdding:.day,value:1,to:day)!}
+            while Calendar.current.isDateInWeekend(day) {
+                guard let next=Calendar.current.date(byAdding:.day,value:1,to:day) else{break}
+                day=next
+            }
             let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360...479)*60))
             let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
             let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110...150)*60))
             let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
             data.pending.append(PairDraft(first:departure,firstEnd:firstEnd,second:back,secondEnd:secondEnd))
         }
-        persist()
+        reallocateFuel()
     }
-    var eligiblePair:PairDraft?{
+    var eligiblePair:PairDraft? {
         guard !Calendar.current.isDateInWeekend(Date()) else{return nil}
-        return data.pending.first { $0.secondEnd<=Date() && $0.postponedDay != dayText(Date()) }
+        return data.pending.first {
+            $0.secondEnd<=Date() && $0.postponedDay != dayText(Date())
+        }
     }
-    func postpone(_ pair:PairDraft){
+    func postpone(_ pair:PairDraft) {
         guard let idx=data.pending.firstIndex(where:{$0.id==pair.id}) else{return}
         data.pending[idx].postponedDay=dayText(Date());persist()
     }
-    func accept(_ pair:PairDraft){
-        let fuel=data.receipts.last?.fuel ?? "Nezadané"
-        let literCount=112.0*data.averageFuel/100.0
-        let unitPrice:Double = {
-            guard let receipt=data.receipts.last,receipt.liters>0 else{return 0}
-            return receipt.cost/receipt.liters
-        }()
+    func accept(_ pair:PairDraft) {
+        guard data.pending.contains(where:{$0.id==pair.id}) else{return}
         data.trips.append(Trip(start:pair.first,end:pair.firstEnd,from:"Trenčín",to:"Přerov",
-            km:112,kind:"Súkromná",simulated:true,liters:literCount,fuel:fuel,cost:literCount*unitPrice))
+            km:112,kind:"Súkromná",simulated:true,liters:0,fuel:vehicleFuel,cost:0))
         data.trips.append(Trip(start:pair.second,end:pair.secondEnd,from:"Přerov",to:"Trenčín",
-            km:112,kind:"Súkromná",simulated:true,liters:literCount,fuel:fuel,cost:literCount*unitPrice))
-        data.pending.removeAll{$0.id==pair.id};persist()
+            km:112,kind:"Súkromná",simulated:true,liters:0,fuel:vehicleFuel,cost:0))
+        data.pending.removeAll{$0.id==pair.id}
+        reallocateFuel()
     }
-    func addReceipt(_ receipt:FuelEntry){data.receipts.append(receipt);persist()}
+    func addReceipt(_ receipt:FuelEntry) {
+        guard receipt.liters.isFinite && receipt.liters>0 && receipt.cost.isFinite && receipt.cost>=0 else{return}
+        data.receipts.append(receipt)
+        if PrivateFuelCalculator.fuelClass(vehicleFuel)=="unknown" &&
+            PrivateFuelCalculator.fuelClass(receipt.fuel) != "unknown" {
+            data.fuelType=receipt.fuel
+        }
+        reallocateFuel()
+    }
 }
 
 struct GPSResult {
@@ -228,6 +293,8 @@ struct ContentView:View {
     @State private var receiptLiters=""
     @State private var receiptFuel=""
     @State private var receiptTotal=""
+    @State private var receiptPhoto:UIImage?
+    @State private var fuelRateInput=""
     @State private var galleryReceipt:PhotosPickerItem?
     @State private var garagePhoto:PhotosPickerItem?
     @State private var garageImage:UIImage?
@@ -282,11 +349,16 @@ struct ContentView:View {
         }
         .onAppear {
             if let bytes=try? Data(contentsOf:photoPath){garageImage=UIImage(data:bytes)}
+            fuelRateInput=String(format:"%.1f",journal.data.averageFuel)
             showConfirmPair=journal.eligiblePair != nil
         }
         .onChange(of:scene){ phase in if phase == .active {showConfirmPair=journal.eligiblePair != nil}}
         .fullScreenCover(item:$selected){trip in TripDetail(trip:trip)}
-        .sheet(item:$draftSheet){ _ in completionSheet }
+        .sheet(item:$draftSheet,onDismiss:{
+            draft=nil
+            startTown="Neznáme miesto"
+            endTown="Neznáme miesto"
+        }){ _ in completionSheet }
         .sheet(isPresented:$showCamera){CameraPicker{picture in
             showCamera=false
             if let picture {readReceipt(picture)}
@@ -318,10 +390,11 @@ struct ContentView:View {
         }else{tracker.start()}
     }
     private func readReceipt(_ image:UIImage){
+        receiptPhoto=image
         receiptText(image){text in
             receiptDay=capturedNumber(#"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})"#,text)
             receiptLiters=capturedNumber(#"(\d{1,3}[,.]\d{1,3})\s*[lL]\b"#,text)
-            receiptTotal=capturedNumber(#"(?:SPOLU|CELKOM|SUMA|TOTAL)\s*:?\s*(\d+[,.]\d{2})"#,text)
+            receiptTotal=capturedNumber(#"(?:SPOLU|CELKOM|SUMA|TOTAL|K\s*[ÚU]HRADE)\s*[:=\-]?\s*(\d+[,.]\d{2})"#,text)
             let upper=text.uppercased()
             receiptFuel = upper.contains("DIESEL") || upper.contains("NAFTA") || upper.contains("B7") ? "Diesel B7"
                 : upper.contains("E10") ? "Benzín E10" : upper.contains("E5") || upper.contains("BENZ") ? "Benzín E5" : ""
@@ -332,19 +405,39 @@ struct ContentView:View {
     private var receiptForm:some View {
         NavigationStack{
             Form {
-                Text("Skontroluj údaje rozpoznané na bločku.")
+                Text("Skontroluj údaje rozpoznané na bločku. Uloženie automaticky prepočíta odhad paliva na súkromné kilometre.")
+                    .font(.caption)
                 TextField("Dátum",text:$receiptDay)
                 TextField("Litrov",text:$receiptLiters).keyboardType(.decimalPad)
                 TextField("Palivo",text:$receiptFuel)
                 TextField("Celková cena €",text:$receiptTotal).keyboardType(.decimalPad)
+                Text("Natankované litre nie sú automaticky spotrebované litre. Nepoužitý zostatok zostane v evidencii.")
+                    .font(.caption).foregroundStyle(.secondary)
             }.navigationTitle("Tankovací bloček")
             .toolbar{
-                ToolbarItem(placement:.cancellationAction){Button("Zrušiť"){showReceipt=false}}
+                ToolbarItem(placement:.cancellationAction){Button("Zrušiť"){
+                    receiptPhoto=nil
+                    showReceipt=false
+                }}
                 ToolbarItem(placement:.confirmationAction){Button("Uložiť"){
                     let lit=Double(receiptLiters.replacingOccurrences(of:",",with:".")) ?? 0
                     let euro=Double(receiptTotal.replacingOccurrences(of:",",with:".")) ?? -1
                     if lit>0 && euro>=0 {
-                        journal.addReceipt(FuelEntry(day:receiptDay,liters:lit,fuel:receiptFuel,cost:euro))
+                        var imageFile:String?=nil
+                        if let bytes=receiptPhoto?.jpegData(compressionQuality:0.85) {
+                            let filename="fuel-receipt-\(UUID().uuidString).jpg"
+                            let destination=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+                                .appendingPathComponent(filename)
+                            if (try? bytes.write(to:destination,options:.atomic)) != nil {
+                                imageFile=filename
+                                try? FileManager.default.setAttributes(
+                                    [.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],
+                                    ofItemAtPath:destination.path)
+                            }
+                        }
+                        journal.addReceipt(FuelEntry(day:receiptDay,liters:lit,fuel:receiptFuel,
+                            cost:euro,photoFile:imageFile))
+                        receiptPhoto=nil
                         showReceipt=false
                     }else{showError="Skontroluj litre a celkovú cenu."}
                 }}
@@ -381,7 +474,10 @@ struct ContentView:View {
                 }
             }.navigationTitle("Ukončiť jazdu")
             .toolbar{
-                ToolbarItem(placement:.cancellationAction){Button("Zavrieť"){draftSheet=nil}}
+                ToolbarItem(placement:.cancellationAction){Button("Zahodiť"){
+                    draft=nil
+                    draftSheet=nil
+                }}
                 ToolbarItem(placement:.confirmationAction){Button("Uložiť"){
                     guard let ride=draft,ride.fixes>=2,ride.distance>=0.02 else {
                         showError="Jazda nemá dostatok GPS údajov.";return
@@ -389,7 +485,7 @@ struct ContentView:View {
                     if privacy == "Súkromná"{journal.addPrivate(ride.distance)}
                     else{
                         journal.saveReal(Trip(start:ride.start,end:ride.end,from:startTown,to:endTown,km:ride.distance,
-                            kind:"Služobná",simulated:false,liters:0,fuel:"Nezadané",cost:0))
+                            kind:"Služobná",simulated:false,liters:0,fuel:journal.vehicleFuel,cost:0))
                     }
                     draft=nil;draftSheet=nil
                     showConfirmPair=journal.eligiblePair != nil
@@ -425,28 +521,101 @@ struct ContentView:View {
         }.padding(14).neonCard()
     }
     private var analytics:some View {
-        VStack(alignment:.leading,spacing:10){
-            Text("Moja analytika").font(.title3.bold())
-            Text("GPS kilometre: "+kilometers(journal.data.trips.filter{!$0.simulated}.reduce(0){$0+$1.km}))
-            Text("Súkromný zostatok: "+kilometers(journal.data.privateKm))
-            Text("Počet záznamov: \(journal.data.trips.count)")
-            Text("Tankovania: \(journal.data.receipts.count)")
-            Text("Priemerná spotreba: \(journal.data.averageFuel,specifier:"%0.1f") l/100 km")
-        }.padding(15).neonCard()
-    }
-    private var vehiclePage:some View{
-        VStack(alignment:.leading,spacing:12){
-            Text("Moje vozidlo").font(.title3.bold())
-            Text("Predvolené pozadie: auto pod bielou plachtou.")
-            PhotosPicker(selection:$garagePhoto,matching:.images){Label("Zmeniť fotografiu auta",systemImage:"photo")}
-            if garageImage != nil {
-                Button("Vrátiť predvolenú garáž") {
-                    try? FileManager.default.removeItem(at:photoPath);garageImage=nil
+        let fuel=journal.fuelSummary
+        return ScrollView {
+            VStack(alignment:.leading,spacing:11) {
+                Text("Moja analytika").font(.title3.bold())
+                Text("Prehľad skutočných a súkromných kilometrov").font(.caption).foregroundStyle(.gray)
+                metric("GPS kilometre",kilometers(journal.data.trips.filter{!$0.simulated}.reduce(0){$0+$1.km}))
+                metric("Súkromný zostatok",kilometers(journal.data.privateKm))
+                metric("Celkovo súkromné kilometre",kilometers(fuel.privateKm))
+                metric("Počet jázd",String(journal.data.trips.count))
+                metric("Počet tankovaní",String(journal.data.receipts.count))
+                Divider().background(.purple)
+                Text("Palivo na súkromné jazdy").font(.headline)
+                metric("Odhad spotreby",String(format:"%.2f l",fuel.estimatedLiters))
+                metric("Priradené z bločkov",String(format:"%.2f l",fuel.allocatedLiters))
+                metric("Zostatok z tankovaní",String(format:"%.2f l",fuel.unallocatedLiters))
+                if fuel.uncoveredLiters>0 {
+                    metric("Spotreba bez doloženého tankovania",String(format:"%.2f l",fuel.uncoveredLiters))
                 }
-            }
-            PhotosPicker(selection:$galleryReceipt,matching:.images){Label("Bloček z galérie",systemImage:"doc.text.viewfinder")}
-            Text("Natankované litre sa evidujú oddelene od spotreby.").font(.caption).foregroundStyle(.gray)
-        }.padding(15).neonCard()
+                metric("Odhad nákladov",String(format:"%.2f €",fuel.estimatedCost))
+                if fuel.excludedReceipts>0 {
+                    Text("Nepriradené bločky s nezhodným alebo neznámym palivom: \(fuel.excludedReceipts)")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Text("Odhad podľa kilometrov a nastavenej spotreby. Tankovanie nie je meraním spotreby.")
+                    .font(.caption).foregroundStyle(.gray)
+            }.padding(15)
+        }.frame(maxHeight:390).neonCard()
+    }
+    private func metric(_ title:String,_ value:String)->some View {
+        HStack(alignment:.firstTextBaseline,spacing:8){
+            Text(title).font(.caption).foregroundStyle(.gray)
+            Spacer(minLength:5)
+            Text(value).font(.subheadline.bold()).multilineTextAlignment(.trailing)
+        }
+    }
+    private func vehicleField(_ title:String,value:String,keyPath:WritableKeyPath<StoreBlob,String?>)->some View {
+        HStack {
+            Text(title).font(.caption).foregroundStyle(.gray).frame(width:85,alignment:.leading)
+            TextField(title,text:Binding(
+                get:{journal.data[keyPath:keyPath] ?? ""},
+                set:{journal.data[keyPath:keyPath]=$0;journal.persist()}
+            )).textFieldStyle(.roundedBorder)
+        }
+    }
+    private var vehiclePage:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:11) {
+                Text("Moje vozidlo").font(.title3.bold())
+                vehicleField("Značka",value:journal.data.carBrand ?? "",keyPath:\.carBrand)
+                vehicleField("Model",value:journal.data.carModel ?? "",keyPath:\.carModel)
+                vehicleField("Rok",value:journal.data.carYear ?? "",keyPath:\.carYear)
+                vehicleField("EČV / ŠPZ",value:journal.data.carPlate ?? "",keyPath:\.carPlate)
+                vehicleField("Farba",value:journal.data.carColor ?? "",keyPath:\.carColor)
+                vehicleField("Povrch",value:journal.data.carFinish ?? "",keyPath:\.carFinish)
+                Picker("Palivo vozidla",selection:Binding(
+                    get:{journal.vehicleFuel},
+                    set:{journal.setFuel($0)}
+                )){
+                    ForEach(["Nezadané","Diesel B7","Benzín E5","Benzín E10"],id:\.self){fuel in
+                        Text(fuel).tag(fuel)
+                    }
+                }.pickerStyle(.menu)
+                HStack {
+                    Text("Spotreba l/100 km").font(.caption)
+                    TextField("6.5",text:$fuelRateInput)
+                        .keyboardType(.decimalPad).textFieldStyle(.roundedBorder)
+                    Button("Použiť"){
+                        if let rate=Double(fuelRateInput.replacingOccurrences(of:",",with:".")),
+                            rate>0 && rate<=50 {
+                            journal.setAverageFuel(rate)
+                        } else {showError="Zadaj spotrebu od 0 do 50 l/100 km."}
+                    }.font(.caption.bold())
+                }
+                Divider().background(.purple)
+                Text("Fotografia vozidla").font(.headline)
+                PhotosPicker(selection:$garagePhoto,matching:.images){
+                    Label("Zmeniť fotografiu auta",systemImage:"photo")
+                }
+                if garageImage != nil {
+                    Button("Vrátiť predvolenú garáž") {
+                        try? FileManager.default.removeItem(at:photoPath)
+                        garageImage=nil
+                    }
+                }else{
+                    Text("Predvolené pozadie: auto pod bielou plachtou.")
+                        .font(.caption).foregroundStyle(.gray)
+                }
+                Divider().background(.purple)
+                PhotosPicker(selection:$galleryReceipt,matching:.images){
+                    Label("Bloček z galérie",systemImage:"doc.text.viewfinder")
+                }
+                Text("Všetky uložené bločky: \(journal.data.receipts.count). Palivo sa odhaduje zo súkromných km.")
+                    .font(.caption).foregroundStyle(.gray)
+            }.padding(15)
+        }.frame(maxHeight:395).neonCard()
     }
     private func tabButton(_ icon:String,index:Int)->some View {
         Button{tab=index}label:{
@@ -501,31 +670,41 @@ extension View{func neonCard()->some View{modifier(NeonCard())}}
 struct TripCard:View {
     let trip:Trip
     var body:some View {
-        VStack(alignment:.leading,spacing:6){
-            HStack{
-                Image(systemName:"car.fill")
-                VStack(alignment:.leading,spacing:1){
-                    Text(trip.from+" – "+trip.to).font(.system(size:13,weight:.bold)).lineLimit(1)
-                    Text(clockText(trip.start)+" → "+clockText(trip.end)).font(.caption2).foregroundStyle(.gray)
-                }
-                Spacer()
-                Text(trip.kind).font(.system(size:9)).padding(5)
-                    .background(Color.purple.opacity(0.5),in:Capsule())
+        VStack(alignment:.leading,spacing:7){
+            HStack(alignment:.center,spacing:8) {
+                Image(systemName:"car.fill").foregroundStyle(.white)
+                VStack(alignment:.leading,spacing:2) {
+                    Text(trip.from).font(.system(size:13,weight:.bold)).lineLimit(1)
+                    Label(clockText(trip.start),systemImage:"clock")
+                        .font(.system(size:10)).foregroundStyle(.white.opacity(0.8))
+                }.frame(maxWidth:.infinity,alignment:.leading)
+                Text("–").font(.caption.bold()).foregroundStyle(.white.opacity(0.85))
+                VStack(alignment:.leading,spacing:2) {
+                    Text(trip.to).font(.system(size:13,weight:.bold)).lineLimit(1)
+                    Label(clockText(trip.end),systemImage:"clock")
+                        .font(.system(size:10)).foregroundStyle(.white.opacity(0.8))
+                }.frame(maxWidth:.infinity,alignment:.leading)
+                Text(trip.kind).font(.system(size:9))
+                    .padding(.horizontal,7).padding(.vertical,5)
+                    .background(Color.purple.opacity(0.58),in:Capsule())
+                    .overlay(Capsule().stroke(.purple.opacity(0.95)))
             }
-            Divider()
+            Divider().overlay(.purple.opacity(0.4))
             HStack(spacing:4){
                 Text(dayText(trip.start))
-                Spacer()
+                Spacer(minLength:1)
                 Text(durationText(trip.start,trip.end))
-                Spacer()
+                Spacer(minLength:1)
                 Text(kilometers(trip.km))
-                Spacer()
-                Text(trip.liters>0 ? String(format:"%0.1f l",trip.liters):"— l")
-                Spacer()
-                Text(trip.cost>0 ? String(format:"%0.2f €",trip.cost):"— €")
-            }.font(.system(size:8,weight:.medium))
-        }.padding(10).background(Color.black.opacity(0.38),in:RoundedRectangle(cornerRadius:14))
-            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.purple.opacity(0.9)))
+                Spacer(minLength:1)
+                Text(trip.liters>0 ? String(format:"%.1f l",trip.liters):"— l")
+                Spacer(minLength:1)
+                Text(trip.cost>0 ? String(format:"%.2f €",trip.cost):"— €")
+            }.font(.system(size:8,weight:.medium)).lineLimit(1)
+        }
+        .padding(10)
+        .background(Color.black.opacity(0.52),in:RoundedRectangle(cornerRadius:15))
+        .overlay(RoundedRectangle(cornerRadius:15).stroke(.purple.opacity(0.95),lineWidth:1.25))
     }
 }
 struct TripDetail:View {
@@ -548,11 +727,17 @@ struct TripDetail:View {
                     LabeledContent("Trvanie",value:durationText(trip.start,trip.end))
                     LabeledContent("Kilometre",value:kilometers(trip.km))
                     LabeledContent("Palivo",value:trip.fuel)
-                    LabeledContent("Spotreba",value:String(format:"%0.1f l (odhad)",trip.liters))
-                    LabeledContent("Náklady",value:String(format:"%0.2f € (odhad)",trip.cost))
+                    LabeledContent("Spotreba",value:String(format:"%.2f l (odhad)",trip.liters))
+                    if trip.simulated {
+                        LabeledContent("Priradené z bločkov",value:String(format:"%.2f l (odhad)",trip.allocatedFromReceipts ?? 0))
+                    }
+                    LabeledContent("Náklady",value:String(format:"%.2f € (odhad z bločkov)",trip.cost))
                 }
-            }.navigationTitle("Podrobnosti jazdy")
-                .toolbar{ToolbarItem(placement:.topBarLeading){Button("Späť"){dismiss()}}}
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(red:0.04,green:0.035,blue:0.075))
+            .navigationTitle("Podrobnosti jazdy")
+            .toolbar{ToolbarItem(placement:.topBarLeading){Button("Späť"){dismiss()}}}
         }
     }
 }

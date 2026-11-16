@@ -20,7 +20,7 @@ import kotlin.random.Random
 data class DriveRecord(
     val id:Long, val kind:String, val simulated:Boolean, val startMs:Long, val endMs:Long,
     val origin:String, val destination:String, val km:Double, val liters:Double,
-    val fuel:String, val cost:Double
+    val fuel:String, val cost:Double, val receiptAllocatedLiters:Double=0.0
 )
 data class TankReceipt(val id:Long,val dateText:String,val liters:Double,val fuel:String,val total:Double,val imagePath:String)
 data class ModelPair(val id:Long,val modelDay:String,val firstMs:Long,val firstEndMs:Long,val secondMs:Long,val secondEndMs:Long)
@@ -104,15 +104,23 @@ class DrivingService:Service(), LocationListener {
     private fun cleanup(){try{manager?.removeUpdates(this)}catch(_:Exception){}}
 }
 
-class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db",null,1){
+class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db",null,2){
     override fun onCreate(db:SQLiteDatabase){
-        db.execSQL("CREATE TABLE drives(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, simulated INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, origin TEXT NOT NULL, destination TEXT NOT NULL, km REAL NOT NULL, liters REAL NOT NULL DEFAULT 0, fuel TEXT NOT NULL DEFAULT '', cost REAL NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE drives(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, simulated INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, origin TEXT NOT NULL, destination TEXT NOT NULL, km REAL NOT NULL, liters REAL NOT NULL DEFAULT 0, fuel TEXT NOT NULL DEFAULT '', cost REAL NOT NULL DEFAULT 0, receipt_allocated_liters REAL NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT NOT NULL)")
         db.execSQL("CREATE TABLE pairs(id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, first_ms INTEGER NOT NULL, first_end_ms INTEGER NOT NULL, second_ms INTEGER NOT NULL, second_end_ms INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending', prompted_day TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE TABLE receipts(id INTEGER PRIMARY KEY AUTOINCREMENT, date_text TEXT NOT NULL, liters REAL NOT NULL, fuel TEXT NOT NULL, total REAL NOT NULL, image_path TEXT NOT NULL)")
         db.execSQL("CREATE INDEX drives_dates ON drives(start_ms DESC)")
     }
-    override fun onUpgrade(db:SQLiteDatabase,oldVersion:Int,newVersion:Int){}
+    override fun onUpgrade(db:SQLiteDatabase,oldVersion:Int,newVersion:Int){
+        if(oldVersion<2){
+            db.execSQL("ALTER TABLE drives ADD COLUMN receipt_allocated_liters REAL NOT NULL DEFAULT 0")
+        }
+    }
+    init {
+        // Upgrade databázy a opätovný prepočet starších uložených bločkov a modelových jázd.
+        reallocatePrivateFuel()
+    }
     fun getSetting(k:String,default:String=""):String{
         readableDatabase.rawQuery("SELECT v FROM kv WHERE k=?",arrayOf(k)).use {c->
             return if(c.moveToFirst()) c.getString(0) else default
@@ -121,8 +129,49 @@ class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db
     fun setSetting(k:String,v:String){
         val cv=ContentValues().apply{put("k",k);put("v",v)}
         writableDatabase.insertWithOnConflict("kv",null,cv,SQLiteDatabase.CONFLICT_REPLACE)
+        if(k=="avg_fuel" || k=="fuel_type") reallocatePrivateFuel()
     }
     fun privateBalance()=getSetting("private_km","0").toDoubleOrNull()?:0.0
+    // Súčet súkromných km: rozpracovaný zostatok + všetky už vytvorené modelové dvojice.
+    // Nie je potrebné ukladať skutočné súkromné miesta, dátumy ani jednotlivé trasy.
+    fun privateTotalKm():Double{
+        val pairCount=readableDatabase.rawQuery("SELECT COUNT(*) FROM pairs",null).use { c ->
+            if(c.moveToFirst()) c.getLong(0) else 0L
+        }
+        return privateBalance() + pairCount*224.0
+    }
+    fun privateFuelSummary():PrivateFuelSummary = PrivateFuelAllocator.calculate(
+        totalPrivateKm=privateTotalKm(),
+        consumptionPer100Km=getSetting("avg_fuel","6.5").toDoubleOrNull()?:6.5,
+        receipts=receipts().map { FuelTicketData(it.liters,it.total,it.fuel) },
+        vehicleFuel=getSetting("fuel_type","")
+    )
+    fun reallocatePrivateFuel() {
+        val db=writableDatabase
+        val summary=privateFuelSummary()
+        val rate=getSetting("avg_fuel","6.5").toDoubleOrNull()?.takeIf {it>0 && it<=50}?:6.5
+        val fuel=getSetting("fuel_type","Nezadané")
+        db.beginTransaction()
+        try {
+            db.rawQuery("SELECT id,km FROM drives WHERE simulated=1 ORDER BY id ASC",null).use { c ->
+                val update=db.compileStatement(
+                    "UPDATE drives SET liters=?, receipt_allocated_liters=?, cost=?, fuel=? WHERE id=?"
+                )
+                while(c.moveToNext()){
+                    val estimate=c.getDouble(1)*rate/100.0
+                    val allocated=estimate*summary.coveredFraction
+                    update.clearBindings()
+                    update.bindDouble(1,estimate)
+                    update.bindDouble(2,allocated)
+                    update.bindDouble(3,allocated*summary.averagePricePerLiter)
+                    update.bindString(4,fuel)
+                    update.bindLong(5,c.getLong(0))
+                    update.executeUpdateDelete()
+                }
+            }
+            db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
+    }
     fun addPrivate(km:Double):Int{
         if(km<=0 || !km.isFinite())return 0
         val db=writableDatabase;var created=0
@@ -146,6 +195,7 @@ class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db
             setSetting("private_km",balance.toString())
             db.setTransactionSuccessful()
         }finally{db.endTransaction()}
+        reallocatePrivateFuel()
         return created
     }
     private fun nextWorkday():LocalDate{
@@ -183,16 +233,15 @@ class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db
         val db=writableDatabase
         db.beginTransaction()
         try{
-            val avg=getSetting("avg_fuel","6.5").toDoubleOrNull()?:6.5
-            val price=getSetting("fuel_price","0").toDoubleOrNull()?:0.0
+            // Spotreba sa odhaduje z km, náklady z bločkov sa dopočítajú až následne.
             val fuel=getSetting("fuel_type","Nezadané")
-            val liters=112.0*avg/100.0
-            insertDrive(db,"Súkromná",true,pair.firstMs,pair.firstEndMs,"Trenčín","Přerov",112.0,liters,fuel,liters*price)
-            insertDrive(db,"Súkromná",true,pair.secondMs,pair.secondEndMs,"Přerov","Trenčín",112.0,liters,fuel,liters*price)
+            insertDrive(db,"Súkromná",true,pair.firstMs,pair.firstEndMs,"Trenčín","Přerov",112.0,0.0,fuel,0.0)
+            insertDrive(db,"Súkromná",true,pair.secondMs,pair.secondEndMs,"Přerov","Trenčín",112.0,0.0,fuel,0.0)
             val cv=ContentValues().apply{put("state","saved")}
             db.update("pairs",cv,"id=?",arrayOf(pair.id.toString()))
             db.setTransactionSuccessful()
         }finally{db.endTransaction()}
+        reallocatePrivateFuel()
     }
     fun addReal(snapshot:DriveSnapshot,origin:String,destination:String,kind:String){
         insertDrive(writableDatabase,kind,false,snapshot.startMs,snapshot.endMs,origin,destination,
@@ -209,9 +258,9 @@ class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db
     }
     fun journeys():List<DriveRecord>{
         val list=mutableListOf<DriveRecord>()
-        readableDatabase.rawQuery("SELECT id,kind,simulated,start_ms,end_ms,origin,destination,km,liters,fuel,cost FROM drives ORDER BY end_ms DESC,id DESC",null).use{c->
+        readableDatabase.rawQuery("SELECT id,kind,simulated,start_ms,end_ms,origin,destination,km,liters,fuel,cost,receipt_allocated_liters FROM drives ORDER BY end_ms DESC,id DESC",null).use{c->
             while(c.moveToNext())list.add(DriveRecord(c.getLong(0),c.getString(1),c.getInt(2)==1,c.getLong(3),
-                c.getLong(4),c.getString(5),c.getString(6),c.getDouble(7),c.getDouble(8),c.getString(9),c.getDouble(10)))
+                c.getLong(4),c.getString(5),c.getString(6),c.getDouble(7),c.getDouble(8),c.getString(9),c.getDouble(10),c.getDouble(11)))
         }
         return list
     }
@@ -220,8 +269,13 @@ class DriveDatabase(context:Context):SQLiteOpenHelper(context,"kniha_jazd_v06.db
             put("date_text",date);put("liters",liters);put("fuel",fuel);put("total",total);put("image_path",imagePath)
         }
         writableDatabase.insertOrThrow("receipts",null,cv)
-        if(fuel.isNotBlank())setSetting("fuel_type",fuel)
-        if(liters>0.0 && total>0.0)setSetting("fuel_price",(total/liters).toString())
+        // Druh paliva z prvého bločku sa predvolí iba vtedy, ak ešte nie je nastavený.
+        // Bločky s opačným druhom paliva zostávajú v evidencii, ale nealokujú sa do súkromnej spotreby.
+        if(PrivateFuelAllocator.fuelClass(getSetting("fuel_type",""))=="unknown" &&
+            PrivateFuelAllocator.fuelClass(fuel)!="unknown"){
+            setSetting("fuel_type",fuel)
+        }
+        reallocatePrivateFuel()
     }
     fun receipts():List<TankReceipt>{
         val list=mutableListOf<TankReceipt>()
