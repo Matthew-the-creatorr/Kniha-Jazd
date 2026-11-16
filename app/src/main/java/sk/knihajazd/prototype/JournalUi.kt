@@ -111,7 +111,7 @@ fun shownCost(v:Double):String=String.format(Locale("sk","SK"),"%.2f",v)+" €"
             IconButton(onClick=onBack){Icon(Icons.Rounded.ArrowBack,"Späť",tint=TextBright)}
             Text("Podrobnosti jazdy",fontSize=20.sp,fontWeight=FontWeight.Bold,
                 color=TextBright,modifier=Modifier.weight(1f))
-            if(record.simulated) Text("Služobná",fontSize=12.sp,color=TextBright,
+            if(record.simulated) Text("Simulovaná",fontSize=12.sp,color=TextBright,
                 modifier=Modifier.border(1.dp,Purple,RoundedCornerShape(15.dp))
                     .padding(horizontal=9.dp,vertical=5.dp))
         }
@@ -129,7 +129,10 @@ fun shownCost(v:Double):String=String.format(Locale("sk","SK"),"%.2f",v)+" €"
             DetailRow("Prejdené",shownKm(record.km))
             DetailRow("Palivo",record.fuel)
             DetailRow("Spotreba",if(record.liters>0)shownLiters(record.liters)+" (odhad)" else "Nezadaná")
-            DetailRow("Náklady",if(record.cost>0)shownCost(record.cost)+" (odhad)" else "Nezadané")
+            if(record.simulated) {
+                DetailRow("Z tankovacích bločkov",shownLiters(record.receiptAllocatedLiters)+" (odhad priradenia)")
+            }
+            DetailRow("Náklady",if(record.cost>0)shownCost(record.cost)+" (odhad z bločkov)" else "Nezadané")
             if(!record.simulated)Text("Poloha a čas z GPS. Trasa sa zatiaľ neukladá na mapu.",
                 color=TextLow,fontSize=11.sp)
         }
