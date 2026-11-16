@@ -17,6 +17,8 @@ struct Trip: Codable, Identifiable {
     var liters: Double
     var fuel: String
     var cost: Double
+    /// Part of estimated consumption covered by the stored compatible fuel receipts.
+    var allocatedFromReceipts: Double? = nil
 }
 struct PairDraft: Codable, Identifiable {
     var id=UUID()
@@ -32,6 +34,7 @@ struct FuelEntry: Codable, Identifiable {
     var liters:Double
     var fuel:String
     var cost:Double
+    var photoFile:String?=nil
 }
 struct StoreBlob: Codable {
     var trips:[Trip]=[]
@@ -39,6 +42,13 @@ struct StoreBlob: Codable {
     var receipts:[FuelEntry]=[]
     var privateKm:Double=0
     var averageFuel:Double=6.5
+    var fuelType:String?=nil
+    var carBrand:String?=nil
+    var carModel:String?=nil
+    var carYear:String?=nil
+    var carPlate:String?=nil
+    var carColor:String?=nil
+    var carFinish:String?=nil
 }
 func dayText(_ date:Date)->String {date.formatted(.dateTime.day().month().year())}
 func clockText(_ date:Date)->String {date.formatted(.dateTime.hour().minute())}
@@ -52,47 +62,102 @@ func durationText(_ start:Date,_ end:Date)->String {
     private var url:URL {
         FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("journal-v06.json")
     }
-    init(){if let raw=try? Data(contentsOf:url),let saved=try? JSONDecoder().decode(StoreBlob.self,from:raw){data=saved}}
-    func persist(){if let bytes=try? JSONEncoder().encode(data){try? bytes.write(to:url,options:.atomic)}}
-    var sorted:[Trip]{data.trips.sorted{$0.end>$1.end}}
+    init() {
+        if let raw=try? Data(contentsOf:url), let saved=try? JSONDecoder().decode(StoreBlob.self,from:raw){
+            data=saved
+        }
+        reallocateFuel()
+    }
+    func persist() {
+        guard let bytes=try? JSONEncoder().encode(data) else{return}
+        do {
+            try bytes.write(to:url,options:.atomic)
+            try FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
+        }catch { print("Unable to persist journal: \(error.localizedDescription)") }
+    }
+    var sorted:[Trip] {data.trips.sorted { $0.end > $1.end }}
+    var privateTotalKm:Double {
+        let savedModelKm=data.trips.filter{$0.simulated}.reduce(0){$0+$1.km}
+        return data.privateKm + Double(data.pending.count)*224.0 + savedModelKm
+    }
+    var vehicleFuel:String {data.fuelType ?? "Nezadané"}
+    var fuelSummary:FuelAllocation {
+        PrivateFuelCalculator.calculate(
+            distanceKm:privateTotalKm,
+            litersPer100Km:data.averageFuel,
+            receipts:data.receipts.map{($0.liters,$0.cost,$0.fuel)},
+            vehicleFuel:vehicleFuel
+        )
+    }
+    func reallocateFuel() {
+        let summary=fuelSummary
+        let validRate=data.averageFuel.isFinite && data.averageFuel>0 && data.averageFuel<=50 ? data.averageFuel : 6.5
+        for i in data.trips.indices where data.trips[i].simulated {
+            let estimated=data.trips[i].km*validRate/100.0
+            let allocated=estimated*summary.coveredFraction
+            data.trips[i].liters=estimated
+            data.trips[i].allocatedFromReceipts=allocated
+            data.trips[i].cost=allocated*summary.averagePrice
+            data.trips[i].fuel=vehicleFuel
+        }
+        persist()
+    }
+    func setFuel(_ newFuel:String) {
+        data.fuelType=newFuel
+        reallocateFuel()
+    }
+    func setAverageFuel(_ rate:Double) {
+        guard rate.isFinite && rate>0 && rate<=50 else{return}
+        data.averageFuel=rate
+        reallocateFuel()
+    }
     func saveReal(_ trip:Trip){data.trips.append(trip);persist()}
-    func addPrivate(_ km:Double){
+    func addPrivate(_ km:Double) {
         guard km.isFinite && km>0 else{return}
-        data.privateKm+=km
+        data.privateKm += km
         while data.privateKm>=224 {
-            data.privateKm-=224
+            data.privateKm -= 224
             var day=Calendar.current.startOfDay(for:Date())
-            while Calendar.current.isDateInWeekend(day){day=Calendar.current.date(byAdding:.day,value:1,to:day)!}
+            while Calendar.current.isDateInWeekend(day) {
+                guard let next=Calendar.current.date(byAdding:.day,value:1,to:day) else{break}
+                day=next
+            }
             let departure=day.addingTimeInterval(TimeInterval(Int.random(in:360...479)*60))
             let firstEnd=departure.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
             let back=firstEnd.addingTimeInterval(TimeInterval(Int.random(in:110...150)*60))
             let secondEnd=back.addingTimeInterval(TimeInterval(Int.random(in:90...120)*60))
             data.pending.append(PairDraft(first:departure,firstEnd:firstEnd,second:back,secondEnd:secondEnd))
         }
-        persist()
+        reallocateFuel()
     }
-    var eligiblePair:PairDraft?{
+    var eligiblePair:PairDraft? {
         guard !Calendar.current.isDateInWeekend(Date()) else{return nil}
-        return data.pending.first { $0.secondEnd<=Date() && $0.postponedDay != dayText(Date()) }
+        return data.pending.first {
+            $0.secondEnd<=Date() && $0.postponedDay != dayText(Date())
+        }
     }
-    func postpone(_ pair:PairDraft){
+    func postpone(_ pair:PairDraft) {
         guard let idx=data.pending.firstIndex(where:{$0.id==pair.id}) else{return}
         data.pending[idx].postponedDay=dayText(Date());persist()
     }
-    func accept(_ pair:PairDraft){
-        let fuel=data.receipts.last?.fuel ?? "Nezadané"
-        let literCount=112.0*data.averageFuel/100.0
-        let unitPrice:Double = {
-            guard let receipt=data.receipts.last,receipt.liters>0 else{return 0}
-            return receipt.cost/receipt.liters
-        }()
+    func accept(_ pair:PairDraft) {
+        guard data.pending.contains(where:{$0.id==pair.id}) else{return}
         data.trips.append(Trip(start:pair.first,end:pair.firstEnd,from:"Trenčín",to:"Přerov",
-            km:112,kind:"Súkromná",simulated:true,liters:literCount,fuel:fuel,cost:literCount*unitPrice))
+            km:112,kind:"Súkromná",simulated:true,liters:0,fuel:vehicleFuel,cost:0))
         data.trips.append(Trip(start:pair.second,end:pair.secondEnd,from:"Přerov",to:"Trenčín",
-            km:112,kind:"Súkromná",simulated:true,liters:literCount,fuel:fuel,cost:literCount*unitPrice))
-        data.pending.removeAll{$0.id==pair.id};persist()
+            km:112,kind:"Súkromná",simulated:true,liters:0,fuel:vehicleFuel,cost:0))
+        data.pending.removeAll{$0.id==pair.id}
+        reallocateFuel()
     }
-    func addReceipt(_ receipt:FuelEntry){data.receipts.append(receipt);persist()}
+    func addReceipt(_ receipt:FuelEntry) {
+        guard receipt.liters.isFinite && receipt.liters>0 && receipt.cost.isFinite && receipt.cost>=0 else{return}
+        data.receipts.append(receipt)
+        if PrivateFuelCalculator.fuelClass(vehicleFuel)=="unknown" &&
+            PrivateFuelCalculator.fuelClass(receipt.fuel) != "unknown" {
+            data.fuelType=receipt.fuel
+        }
+        reallocateFuel()
+    }
 }
 
 struct GPSResult {
