@@ -353,6 +353,18 @@ struct ContentView:View {
             showConfirmPair=journal.eligiblePair != nil
         }
         .onChange(of:scene){ phase in if phase == .active {showConfirmPair=journal.eligiblePair != nil}}
+        .onChange(of:privacy){ selection in
+            if selection=="Služobná",let ride=draft {
+                Task {
+                    let origin=await tracker.city(ride.first)
+                    let destination=await tracker.city(ride.last)
+                    if privacy=="Služobná" {
+                        startTown=origin
+                        endTown=destination
+                    }
+                }
+            }
+        }
         .fullScreenCover(item:$selected){trip in TripDetail(trip:trip)}
         .sheet(item:$draftSheet,onDismiss:{
             draft=nil
